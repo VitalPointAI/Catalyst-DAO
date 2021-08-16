@@ -35,7 +35,8 @@ import {
   Donation,
   contributions,
   delegation,
-  delegationInfo
+  delegationInfo,
+  GenericObject
  } from './dao-models'
 
 import {
@@ -1681,6 +1682,10 @@ export function submitMemberProposal (
 
     let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     f[6] = true // member proposal
+
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
   
     _submitProposal(
       a, 
@@ -1695,7 +1700,8 @@ export function submitMemberProposal (
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
  
     return true
@@ -1714,12 +1720,14 @@ return false
  * @param tT // tributeToken (type of token)
  * @param pR // paymentRequested (amount of payment requested) - in yocto if NEAR
  * @param pT // paymentToken (desired token for payment)
+ * @param referenceIds // reference Ids
  * @param contractId
 */
 export function submitPayoutProposal (
   a: AccountId,
   pR: u128,
   pT: AccountId,
+  referenceIds: Array<GenericObject>,
   contractId: AccountId
 ): bool {
 assert(tokenWhiteList.getSome(pT), ERR_NOT_WHITELISTED_PT)
@@ -1754,7 +1762,8 @@ if(transferred) {
     new Array<string>(), 
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    referenceIds
     )
 
   return true
@@ -1809,6 +1818,10 @@ if(transferred) {
   let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
   f[9] = true // tribute proposal
 
+  let references = new Array<GenericObject>()
+  let defaultObject = new GenericObject('','')
+  references.push(defaultObject)
+
   _submitProposal(
     a, 
     sR, 
@@ -1822,7 +1835,8 @@ if(transferred) {
     new Array<string>(), 
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    references    
     )
 
   return true
@@ -1841,7 +1855,8 @@ return false
 export function submitCommitmentProposal(
   applicant: AccountId, 
   paymentRequested: u128, 
-  paymentToken: AccountId, 
+  paymentToken: AccountId,
+  referenceIds: Array<GenericObject>,
   contractId: AccountId
   ): bool {
   assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
@@ -1877,7 +1892,8 @@ export function submitCommitmentProposal(
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      referenceIds
       )
     return true
   }
@@ -1914,6 +1930,10 @@ export function submitConfigurationProposal(
     let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     f[10] = true // commitment
 
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       applicant, 
       u128.Zero, 
@@ -1927,7 +1947,8 @@ export function submitConfigurationProposal(
       configuration, 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
     return true
   }
@@ -1963,6 +1984,10 @@ export function submitOpportunityProposal(
     let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     f[8] = true // opportunity
 
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       creator, 
       u128.Zero, 
@@ -1976,7 +2001,8 @@ export function submitOpportunityProposal(
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
     return true
   }
@@ -2013,6 +2039,10 @@ export function submitGuildKickProposal(
     let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     f[5] = true; // guild kick
     
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       memberToKick, 
       u128.Zero, 
@@ -2026,7 +2056,8 @@ export function submitGuildKickProposal(
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
     return true
   }
@@ -2054,6 +2085,10 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
     let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     f[4] = true; // whitelist
     
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       '', 
       u128.Zero, 
@@ -2067,7 +2102,8 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
     return true
   }
@@ -2122,6 +2158,10 @@ export function submitCommunityRoleProposal(
         action
         )
       
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       '', 
       u128.Zero, 
@@ -2135,7 +2175,8 @@ export function submitCommunityRoleProposal(
       new Array<string>(), 
       newRole,
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
     return true
   }
@@ -2192,7 +2233,11 @@ export function submitAssignRoleProposal(
         roleDescription,
         action
     )
-      
+    
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       member, 
       u128.Zero, 
@@ -2206,7 +2251,8 @@ export function submitAssignRoleProposal(
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      newMemberRoleConfiguration
+      newMemberRoleConfiguration,
+      references
       )
     return true
   }
@@ -2261,7 +2307,11 @@ export function submitReputationFactorProposal(
         repFactorActions,
         action
         )
-      
+
+    let references = new Array<GenericObject>()
+    let defaultObject = new GenericObject('','')
+    references.push(defaultObject)
+
     _submitProposal(
       '', 
       u128.Zero, 
@@ -2275,7 +2325,8 @@ export function submitReputationFactorProposal(
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       newRepFactor,
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', '')
+      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      references
       )
     return true
   }
@@ -2311,7 +2362,8 @@ function _submitProposal(
   configuration: Array<string>,
   roleConfiguration: communityRole,
   reputationConfiguration: reputationFactor,
-  memberRoleConfiguration: communityRole
+  memberRoleConfiguration: communityRole,
+  referenceIds: Array<GenericObject>
 ): bool {
   let pI = proposals.length
   proposals.push(new Proposal(
@@ -2338,7 +2390,8 @@ function _submitProposal(
     configuration, // configuration
     roleConfiguration, // roleconfiguration
     reputationConfiguration, // reputationConfiguration
-    memberRoleConfiguration // member specific role configuration
+    memberRoleConfiguration, // member specific role configuration
+    referenceIds // references to other proposals
   ))
   
   votesByMember.push({user: Context.predecessor, pI: pI, vote: ''})

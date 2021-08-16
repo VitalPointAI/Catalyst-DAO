@@ -71,6 +71,21 @@ export class Donation {
 }
 
 @nearBindgen
+export class GenericObject {
+    keyName: string;
+    valueSetting: string;
+
+    constructor(
+        keyName: string,
+        valueSetting: string
+    )
+    {
+        this.keyName = keyName;
+        this.valueSetting = valueSetting;
+    }
+}
+
+@nearBindgen
 export class communityRole {
     roleName: string; // name of role
     roleReward: u128; // any reward associated with holding the role
@@ -210,6 +225,7 @@ export class Proposal {
     roleConfiguration: communityRole; // configuration changes to existing/add new roles
     reputationConfiguration: reputationFactor; //configuration changes to existing/add new reputation factors
     memberRoleConfiguration: communityRole; //member specific configuration changes to existing roles 
+    referenceIds: Array<GenericObject>; // array of objects that correspond to other information such as proposals that this proposal references
 
     constructor (
         proposalIdentifier: i32,
@@ -235,7 +251,8 @@ export class Proposal {
         configuration: Array<string>,
         roleConfiguration: communityRole,
         reputationConfiguration: reputationFactor,
-        memberRoleConfiguration: communityRole
+        memberRoleConfiguration: communityRole,
+        referenceIds: Array<GenericObject>,
     )
     {
         this.pI = proposalIdentifier;
@@ -262,5 +279,6 @@ export class Proposal {
         this.roleConfiguration = roleConfiguration;
         this.reputationConfiguration = reputationConfiguration;
         this.memberRoleConfiguration = memberRoleConfiguration;
+        this.referenceIds = referenceIds;
     }
 }
