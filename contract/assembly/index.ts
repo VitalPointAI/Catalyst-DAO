@@ -1746,8 +1746,8 @@ assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('100
 let transferred = _sT(proposalDeposit, depositToken, contractId)
 
 if(transferred) {
-  let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-  f[12] = true // payout proposal
+  let f = new Array<bool>(15) 
+  f[11] = true // payout proposal
 
   _submitProposal(
     a, 
@@ -1876,7 +1876,7 @@ export function submitCommitmentProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let f = new Array<bool>(15) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     f[7] = true // commitment
 
     _submitProposal(
@@ -1928,7 +1928,7 @@ export function submitConfigurationProposal(
 
   if(transferred) {
     let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[10] = true // commitment
+    f[10] = true // configuration
 
     let references = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')

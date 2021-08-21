@@ -214,7 +214,24 @@ export class Proposal {
     sP: i32; // startingPeriod: the period in which voting can start for this proposal
     yV: u128; // yesVotes: the total number of YES votes for this proposal
     nV: u128; // noVotes: the total number of NO votes for this proposal
-    f: Array<bool>; // flags: [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout]
+    f: Array<bool>; /* flags [
+                            0: sponsored, 
+                            1: processed, 
+                            2: didPass, 
+                            3: cancelled, 
+                            4: whitelist, 
+                            5: guildkick, 
+                            6: member, 
+                            7: commitment, 
+                            8: opportunity, 
+                            9: tribute, 
+                            10: configuration, 
+                            11: payout, 
+                            12: communityRole, 
+                            13: reputationFactor, 
+                            14: assignRole
+                        ]
+                        */
     mT: u128; // the maximum # of total shares and loot encountered at a yes vote on this proposal
     pS: u64; // proposalSubmitted: blockindex when proposal was submitted
     vP: i32; // voting period
