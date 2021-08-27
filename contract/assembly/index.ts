@@ -729,7 +729,7 @@ function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
 /**
  * Cancels a proposal before it has been sponsored.  Returns proposal deposit to proposer.
  * @param pI (proposal Id)
- * @param deposit (propposal deposit)
+ * @param deposit (proposal deposit)
  * @param to
 */
 // NOTE: requires that proposer cancels
@@ -746,19 +746,21 @@ export function cancelProposal(pI: i32, tribute: u128, loot: u128): Proposal {
   proposal.f = f
   proposals[pI] = proposal
 
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let totalSharesLoot = u128.add(tribute, loot)
-  let amount = u128.add(proposalDeposit, totalSharesLoot)
-  let transferred = _sT(amount, proposal.tT, proposal.p)
+  // return proposal deposit
+  let returned = _returnDeposit(proposal.p)
 
-  if(transferred) {
-  _subtractFromBalance(proposal.p, proposal.tT, totalSharesLoot)
-  _subtractFromBalance(ESCROW, proposal.tT, totalSharesLoot)
-  _subtractFromTotalBalance(proposal.tT, totalSharesLoot)
- 
-  return proposal
+  if(returned){
+    // return any shares/loot
+    let totalSharesLoot = u128.add(tribute, loot)
+    let secondTransfer = _sT(totalSharesLoot, proposal.tT, proposal.p)
+
+    if(secondTransfer) {
+    _subtractFromBalance(proposal.p, proposal.tT, totalSharesLoot)
+    _subtractFromBalance(ESCROW, proposal.tT, totalSharesLoot)
+    _subtractFromTotalBalance(proposal.tT, totalSharesLoot)
+    }
+    return proposal
   }
-
   return proposal
 }
 
