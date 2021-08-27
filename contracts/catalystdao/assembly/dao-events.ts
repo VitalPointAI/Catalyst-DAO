@@ -1,9 +1,7 @@
-//@nearBindgen
-
-const DEBUG = false;
-
 import { Context, u128, PersistentDeque, PersistentVector, logging } from "near-sdk-as";
 import { memberAddressByDelegatekey } from "./dao-models";
+
+const DEBUG = false;
 
 // ----------------------------------------------------------------------------
 // this file contains models representing events emitted by the contract
@@ -122,71 +120,28 @@ export function daoUpdateEvent(summoner: string, updated: u64, periodDuration: i
 
 @nearBindgen
 export class SPE {
-  pI: i32;
-  a: string;
-  p: string;
-  s: string;
-  sR: u128;
-  lR: u128;
-  tO: u128;
-  tT: string;
-  pR: u128;
-  pT: string;
-  f: Array<bool>;
-  dK: string;
-  mA: string;
-  pS: u64;
-  vP: i32;
-  gP: i32;
-  sP: i32;
-  yV: u128;
-  nV: u128;
-  voteFinalized: u64;
-
   constructor(
-    pI: i32,
-    a: string,
-    p: string,
-    s: string,
-    sR: u128,
-    lR: u128,
-    tO: u128,
-    tT: string,
-    pR: u128,
-    pT: string,
-    f: Array<bool>,
-    dK: string,
-    mA: string,
-    pS: u64,
-    vP: i32,
-    gP: i32,
-    sP: i32,
-    yV: u128,
-    nV: u128,
-    voteFinalized: u64
-    
-  ){
-    this.pI = pI
-    this.a = a
-    this.p = p
-    this.s = s
-    this.sR = sR
-    this.lR = lR
-    this.tO = tO
-    this.tT = tT
-    this.pR = pR
-    this.pT = pT
-    this.f = f
-    this.dK = dK
-    this.mA = mA
-    this.pS = pS
-    this.vP = vP
-    this.gP = gP
-    this.sP = sP
-    this.yV = yV
-    this.nV = nV
-    this.voteFinalized = voteFinalized
-  }
+    public pI: i32,
+    public a: string,
+    public p: string,
+    public s: string,
+    public sR: u128,
+    public lR: u128,
+    public tO: u128,
+    public tT: string,
+    public pR: u128,
+    public pT: string,
+    public f: Array<bool>,
+    public dK: string,
+    public mA: string,
+    public pS: u64,
+    public vP: i32,
+    public gP: i32,
+    public sP: i32,
+    public yV: u128,
+    public nV: u128,
+    public voteFinalized: u64,
+  ){}
 }
 
 // setup a queue for summon complete events

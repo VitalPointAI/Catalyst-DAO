@@ -1,0 +1,40 @@
+{
+  "name": "catalyst-dao",
+  "version": "1.0.0",
+  "license": "ISC",
+  "author": "Aaron Luhning [a.luhning@vitalpoint.ai] | Vital Point AI [https://vitalpoint.ai]",
+  "private": true,
+  "scripts": {
+    "build": "asb",
+    "build:debug": "asb --target debug",
+    "test:sandbox": "jest",
+    "test:testnet": "NEAR_RUNNER_NETWORK=testnet jest",
+    "test:unit": "asp --nologo",
+    "build:factory": "asb -d contracts/factory --outDir ./build",
+    "build:dao": "asb -d contracts/catalystdao --outDir ./build",
+    "build:registry": "asb -d contracts/registry --outDir ./build"
+  },
+  "dependencies": {
+    "@types/jest": "^27.0.1",
+    "@types/node": "^16.7.4",
+    "near-sdk-as": "^3.2.3"
+  },
+  "devDependencies": {
+    "jest": "^27.1.0",
+    "near-runner": "near/runner-js#feat/executionResult",
+    "shelljs": "^0.8.4",
+    "ts-jest": "^27.0.5",
+    "typescript": "^4.4.2"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/__tests__/**/*.spec.ts"
+    ],
+    "testPathIgnorePatterns": [
+      "/assembly/",
+      "/node_modules/"
+    ]
+  }
+}
