@@ -9,7 +9,8 @@
  */
  import path from 'path';
  import {Runner, toYocto} from 'near-runner';
- import { DaoModel } from '../contracts/factory/assembly';
+ import { DaoModel } from '../contracts/factory/assembly/model';
+ import * as fs from 'fs/promises';
 
  const TEN_NEAR = toYocto("10");
  
@@ -18,13 +19,20 @@
    jest.setTimeout(60_000);
  
    beforeAll(async () => {
-     runner = await Runner.create(async ({root}) => ({
+     runner = await Runner.create(async ({root}) => {
+       const res = {
        contract: await root.createAndDeploy(
          'factory',
          path.join(__dirname, '..','build', 'release', 'factory.wasm'),
+         {method: "init", args: {ownerId: root}}
        ),
-     }));
+     }
+     await root.createTransaction(res.contract)
+         .functionCall('setBinary', await fs.readFile(path.join(__dirname, '..', 'build', 'release', 'catalystdao.wasm')))
+         .signAndSend();
+     return res
    });
+  });
  
    test('Doa list should be empty', async () => {
      await runner.run(async ({contract, root}) => {

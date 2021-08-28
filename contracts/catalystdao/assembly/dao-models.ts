@@ -46,7 +46,7 @@ export class Votes {
 @nearBindgen
 export class UserVote {
     user: string;
-    pI: i32;
+    proposalId: i32;
     vote: string;
 }
 
@@ -171,31 +171,31 @@ export class Member {
 export class Proposal {
   constructor(
     /** proposalId: frontend generated id to link record to proposal details */
-    public pI: i32,
+    public proposalId: i32,
     /** applicant: the applicant who wishes to become a member - this key will be used for withdrawals (doubles as guild kick target for gkick proposals) */
-    public a: AccountId,
+    public applicant: AccountId,
     /** proposer: the account that submitted the proposal (can be non-member) */
-    public p: AccountId,
+    public proposer: AccountId,
     /** sponsor: the member that sponsored the proposal (moving it into the queue for voting and processing) */
-    public s: AccountId,
+    public sponsor: AccountId,
     /** sharesRequested: the # of shares the applicant is requesting */
-    public sR: u128,
+    public sharesRequested: u128,
     /** lootRequested: the amount of loot the applicant is requesting */
-    public lR: u128,
+    public lootRequested: u128,
     /** tributeOffered: amount of tokens offered as tribute */
-    public tO: u128,
+    public tributeOffered: u128,
     /** tributeToken: tribute token contract reference (type of tribute token) */
-    public tT: AccountId,
+    public tributeToken: AccountId,
     /** paymentRequested: amount of tokens requested as payment */
-    public pR: u128,
+    public paymentRequested: u128,
     /** paymentToken: payment token contract reference (type of payment token) */
-    public pT: AccountId,
+    public paymentToken: AccountId,
     /** startingPeriod: the period in which voting can start for this proposal */
-    public sP: i32,
+    public startingPeriod: i32,
     /** yesVotes: the total number of YES votes for this proposal */
-    public yV: u128,
+    public yesVotes: u128,
     /** noVotes: the total number of NO votes for this proposal */
-    public nV: u128,
+    public noVotes: u128,
     /* flags [
                             0: sponsored, 
                             1: processed, 
@@ -214,15 +214,15 @@ export class Proposal {
                             14: assignRole
                         ]
                         */
-    public f: Array<bool>, 
+    public flags: Array<bool>, 
     /** the maximum # of total shares and loot encountered at a yes vote on this proposal */
-    public mT: u128,
+    public maxTotalSharesAndLootAtYesVote: u128,
     /** proposalSubmitted: blockindex when proposal was submitted */
-    public pS: u64,
+    public proposalSubmitted: u64,
     /** voting period */
-    public vP: i32,
+    public votingPeriod: i32,
     /** grace period */
-    public gP: i32,
+    public gracePeriod: i32,
     /** roles to assign to member */
     public roleNames: Array<string>,
     /** block timestamp of when vote was finalized */
@@ -239,4 +239,4 @@ export class Proposal {
     public referenceIds: Array<GenericObject>,
     )
     {}
-}
+} 
