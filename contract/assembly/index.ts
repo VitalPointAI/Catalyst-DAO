@@ -1634,70 +1634,68 @@ PROPOSAL FUNCTIONS
 
 /**
  * Submit a Member proposal - used to join a community DAO and be issued voting or non-voting shares
- * @param a // applicant
- * @param sR // sharesRequested (voting shares)
- * @param lR // lootRequested (non-voting shares)
- * @param tO // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
- * @param tT // tributeToken (type of token)
- * @param pR // paymentRequested (amount of payment requested) - in yocto if NEAR
- * @param pT // paymentToken (desired token for payment)
+ * @param applicant // applicant
+ * @param sharesRequested // sharesRequested (voting shares)
+ * @param lootRequested // lootRequested (non-voting shares)
+ * @param tributeOffered // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
+ * @param tributeToken // tributeToken (type of token)
  * @param roleNames // rolenames of roles to add to member
  * @param contractId
 */
 export function submitMemberProposal (
-    a: AccountId,
-    sR: u128,
-    lR: u128,
-    tO: u128,
-    tT: AccountId,
+    applicant: AccountId,
+    sharesRequested: u128,
+    lootRequested: u128,
+    tributeOffered: u128,
+    tributeToken: AccountId,
     roleNames: Array<string>, 
     contractId: AccountId
 ): bool {
-  assert(u128.le(u128.add(sR, lR), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-  assert(tokenWhiteList.getSome(tT), ERR_NOT_WHITELISTED)
-  assert(env.isValidAccountID(a), ERR_INVALID_ACCOUNT_ID)
-  assert(a != GUILD && a != ESCROW && a != TOTAL, ERR_RESERVED)
-  assert(members.get(a) == null, 'already a member')
-  assert(_memberProposalPresent(a) == false, 'member proposal already in progress')
+  assert(u128.le(u128.add(sharesRequested, lootRequested), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
+  assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
+  assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+  assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
+  assert(members.get(applicant) == null, 'already a member')
+  assert(_memberProposalPresent(applicant) == false, 'member proposal already in progress')
 
-  if(members.contains(a)) {
-    assert(members.getSome(a).jailed == 0, ERR_JAILED)
+  if(members.contains(applicant)) {
+    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
   }
   
-  if(u128.gt(tO, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, tT), u128.Zero)) {
+  if(u128.gt(tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, tributeToken), u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
   }
 
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let contribution = u128.add(tO, lR)
+  let contribution = u128.add(tributeOffered, lootRequested)
   let totalAmount = u128.add(proposalDeposit, contribution)
   assert(u128.eq(Context.attachedDeposit, u128.mul(u128.add(contribution, proposalDeposit), u128.from('1000000000000000000000000'))), 'attached deposit not correct')
 
-  let transferred = _sT(totalAmount, tT, contractId)
+  let transferred = _sT(totalAmount, tributeToken, contractId)
 
   if(transferred) {
-    _addToBalance(Context.predecessor, tT, contribution)
-    _addToBalance(ESCROW, tT, contribution)
-    _addToTotalBalance(tT, contribution)
+    _addToBalance(Context.predecessor, tributeToken, contribution)
+    _addToBalance(ESCROW, tributeToken, contribution)
+    _addToTotalBalance(tributeToken, contribution)
 
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[6] = true // member proposal
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[6] = true // member proposal
 
     let references = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
   
     _submitProposal(
-      a, 
-      sR, 
-      lR, 
-      tO, 
-      tT, 
+      applicant, 
+      sharesRequested, 
+      lootRequested, 
+      tributeOffered, 
+      tributeToken, 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       roleNames, 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -1715,29 +1713,25 @@ return false
 
 /**
  * Submit a Payout proposal - used to request payment for completed work as per an already approved funding commitment
- * @param a // applicant
- * @param sR // sharesRequested (voting shares)
- * @param lR // lootRequested (non-voting shares)
- * @param tO // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
- * @param tT // tributeToken (type of token)
- * @param pR // paymentRequested (amount of payment requested) - in yocto if NEAR
- * @param pT // paymentToken (desired token for payment)
+ * @param applicant // applicant
+ * @param paymentRequested // paymentRequested (amount of payment requested) - in yocto if NEAR
+ * @param paymentToken // paymentToken (desired token for payment)
  * @param referenceIds // reference Ids
  * @param contractId
 */
 export function submitPayoutProposal (
-  a: AccountId,
-  pR: u128,
-  pT: AccountId,
+  applicant: AccountId,
+  paymentRequested: u128,
+  paymentToken: AccountId,
   referenceIds: Array<GenericObject>,
   contractId: AccountId
 ): bool {
-assert(tokenWhiteList.getSome(pT), ERR_NOT_WHITELISTED_PT)
-assert(env.isValidAccountID(a), ERR_INVALID_ACCOUNT_ID)
-assert(a != GUILD && a != ESCROW && a != TOTAL, ERR_RESERVED)
+assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
 
-if(members.contains(a)) {
-  assert(members.getSome(a).jailed == 0, ERR_JAILED)
+if(members.contains(applicant)) {
+  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
 }
 
 // Funds transfers
@@ -1748,18 +1742,18 @@ assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('100
 let transferred = _sT(proposalDeposit, depositToken, contractId)
 
 if(transferred) {
-  let f = new Array<bool>(15) 
-  f[11] = true // payout proposal
+  let flags = new Array<bool>(15) 
+  flags[11] = true // payout proposal
 
   _submitProposal(
-    a, 
+    applicant, 
     u128.Zero, 
     u128.Zero, 
     u128.Zero, 
     '', 
-    pR, 
-    pT, 
-    f, 
+    paymentRequested, 
+    paymentToken, 
+    flags, 
     new Array<string>(), 
     new Array<string>(), 
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -1776,63 +1770,61 @@ return false
 
 /**
  * Submit a tribute proposal - used to increase voting shares by contributing more to the community fund
- * @param a // applicant
- * @param sR // sharesRequested (voting shares)
- * @param tO // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
- * @param tT // tributeToken (type of token)
- * @param pR // paymentRequested (amount of payment requested) - in yocto if NEAR
- * @param pT // paymentToken (desired token for payment)
+ * @param applicant // applicant
+ * @param sharesRequested // sharesRequested (voting shares)
+ * @param tributeOffered // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
+ * @param tributeToken // tributeToken (type of token)
  * @param contractId
 */
 export function submitTributeProposal (
-  a: AccountId,
-  sR: u128,
-  tO: u128,
-  tT: AccountId,
+  applicant: AccountId,
+  sharesRequested: u128,
+  tributeOffered: u128,
+  tributeToken: AccountId,
   contractId: AccountId
 ): bool {
-assert(u128.le(sR, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-assert(tokenWhiteList.getSome(tT), ERR_NOT_WHITELISTED)
-assert(env.isValidAccountID(a), ERR_INVALID_ACCOUNT_ID)
-assert(a != GUILD && a != ESCROW && a != TOTAL, ERR_RESERVED)
+assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
+assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
+assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
 
-if(members.contains(a)) {
-  assert(members.getSome(a).jailed == 0, ERR_JAILED)
+if(members.contains(applicant)) {
+  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
 }
 
-if(u128.gt(tO, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, tT), u128.Zero)) {
+if(u128.gt(tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, tributeToken), u128.Zero)) {
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
 }
 
 // Funds transfers
 let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-let totalContribution = u128.add(proposalDeposit, tO)
+let totalContribution = u128.add(proposalDeposit, tributeOffered)
 assert(u128.eq(Context.attachedDeposit, u128.mul(totalContribution, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
 
-let transferred = _sT(totalContribution, tT, contractId)
+let transferred = _sT(totalContribution, tributeToken, contractId)
 
 if(transferred) {
-  _addToBalance(a, tT, tO)
-  _addToBalance(ESCROW, tT, tO)
-  _addToTotalBalance(tT, tO)
+  _addToBalance(applicant, tributeToken, tributeOffered)
+  _addToBalance(ESCROW, tributeToken, tributeOffered)
+  _addToTotalBalance(tributeToken, tributeOffered)
 
-  let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-  f[9] = true // tribute proposal
+  let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+  flags[9] = true // tribute proposal
 
   let references = new Array<GenericObject>()
   let defaultObject = new GenericObject('','')
   references.push(defaultObject)
 
   _submitProposal(
-    a, 
-    sR, 
+    applicant, 
+    sharesRequested, 
     u128.Zero, 
-    tO, 
-    tT, 
+    tributeOffered, 
+    tributeToken, 
     u128.Zero, 
     '', 
-    f, 
+    flags, 
     new Array<string>(), 
     new Array<string>(), 
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -1878,8 +1870,8 @@ export function submitCommitmentProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let f = new Array<bool>(15) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[7] = true // commitment
+    let flags = new Array<bool>(15) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[7] = true // commitment
 
     _submitProposal(
       applicant, 
@@ -1889,7 +1881,7 @@ export function submitCommitmentProposal(
       '', 
       paymentRequested, 
       paymentToken, 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -1929,8 +1921,8 @@ export function submitConfigurationProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[10] = true // configuration
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[10] = true // configuration
 
     let references = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
@@ -1944,7 +1936,7 @@ export function submitConfigurationProposal(
       '', 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       configuration, 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -1983,8 +1975,8 @@ export function submitOpportunityProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[8] = true // opportunity
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[8] = true // opportunity
 
     let references = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
@@ -1998,7 +1990,7 @@ export function submitOpportunityProposal(
       '', 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -2038,8 +2030,8 @@ export function submitGuildKickProposal(
     let transferred = _sT(proposalDeposit, depositToken, contractId)
 
     if(transferred) {
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[5] = true; // guild kick
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[5] = true; // guild kick
     
     let references = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
@@ -2053,7 +2045,7 @@ export function submitGuildKickProposal(
       '', 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -2084,8 +2076,8 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[4] = true; // whitelist
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[4] = true; // whitelist
     
     let references = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
@@ -2099,7 +2091,7 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
       tokenToWhitelist, 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -2146,8 +2138,8 @@ export function submitCommunityRoleProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
-    f[12] = true; // communityRole
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
+    flags[12] = true; // communityRole
 
     let newRole = new communityRole(
         roleName,
@@ -2172,7 +2164,7 @@ export function submitCommunityRoleProposal(
       '', 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       newRole,
@@ -2222,8 +2214,8 @@ export function submitAssignRoleProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
-    f[14] = true; // assignRole
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
+    flags[14] = true; // assignRole
 
     let newMemberRoleConfiguration = new communityRole(
         roleName,
@@ -2248,7 +2240,7 @@ export function submitAssignRoleProposal(
       '', 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -2296,8 +2288,8 @@ export function submitReputationFactorProposal(
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let f = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
-    f[13] = true; // reputationFactor
+    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    flags[13] = true; // reputationFactor
 
     let newRepFactor = new reputationFactor(
         repFactorName,
@@ -2322,7 +2314,7 @@ export function submitReputationFactorProposal(
       '', 
       u128.Zero, 
       '', 
-      f, 
+      flags, 
       new Array<string>(), 
       new Array<string>(), 
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
@@ -2338,28 +2330,28 @@ export function submitReputationFactorProposal(
 
 /**
  * Internal private submit proposal function - builds the actual proposal
- * @param a // applicant
- * @param sR // sharesRequested (voting shares)
- * @param lR // lootRequested (non-voting shares)
- * @param tO // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
- * @param tT // tributeToken (type of token)
- * @param pR // paymentRequested (amount of payment requested) - in yocto if NEAR
- * @param pT // paymentToken (desired token for payment)
- * @param f // flags [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, roleConfiguration, reputationConfiguration]
+ * @param applicant // applicant
+ * @param sharesRequested // sharesRequested (voting shares)
+ * @param lootRequested // lootRequested (non-voting shares)
+ * @param tributeOffered // tributeOffered (contribution to the community fund - 1 for 1 for voting shares if deposit token)
+ * @param tributeToken // tributeToken (type of token)
+ * @param paymentRequested // paymentRequested (amount of payment requested) - in yocto if NEAR
+ * @param paymentToken // paymentToken (desired token for payment)
+ * @param flags // flags [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, roleConfiguration, reputationConfiguration]
  * @param roleNames
  * @param configuration
  * @param roleConfiguration
  * @param reputationConfiguration
 */
 function _submitProposal(
-  a: AccountId,
-  sR: u128,
-  lR: u128,
-  tO: u128,
-  tT: AccountId,
-  pR: u128,
-  pT: AccountId,
-  f: Array<bool>,
+  applicant: AccountId,
+  sharesRequested: u128,
+  lootRequested: u128,
+  tributeOffered: u128,
+  tributeToken: AccountId,
+  paymentRequested: u128,
+  paymentToken: AccountId,
+  flags: Array<bool>,
   roleNames: Array<string>,
   configuration: Array<string>,
   roleConfiguration: communityRole,
@@ -2370,19 +2362,19 @@ function _submitProposal(
   let proposalId = proposals.length
   proposals.push(new Proposal(
     proposalId, // proposal Id
-    a, // applicant
+    applicant, // applicant
     Context.predecessor, // proposer
     '', // sponsor
-    sR, // sharesRequested
-    lR, // lootRequested
-    tO, // tributeOffered
-    tT, // tributeToken
-    pR, // paymentRequested
-    pT, // paymentToken
+    sharesRequested, // sharesRequested
+    lootRequested, // lootRequested
+    tributeOffered, // tributeOffered
+    tributeToken, // tributeToken
+    paymentRequested, // paymentRequested
+    paymentToken, // paymentToken
     0, // startingPeriod
     u128.Zero, // yesVotes
     u128.Zero, // noVotes
-    f, // flags: [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, roleConfiguration, reputationConfiguration]
+    flags, // flags: [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, roleConfiguration, reputationConfiguration]
     u128.Zero, //the maximum # of total shares encountered at a yes vote on this proposal
     Context.blockTimestamp, // submission time
     0, // votingPeriod
