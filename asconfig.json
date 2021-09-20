@@ -1,0 +1,8 @@
+{
+  "workspaces": [
+    "contracts/catalystdao",
+    "contracts/registry",
+    "contracts/factory"
+  ],
+  "extends": "near-sdk-as/asconfig.json"
+}
