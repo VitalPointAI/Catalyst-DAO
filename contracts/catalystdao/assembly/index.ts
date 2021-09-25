@@ -9,11 +9,14 @@ import {
   GracePeriodLength, 
   ProposalDeposit, 
   DilutionBound,
-  VoteThreshold
+  VoteThreshold,
+  ONE_NEAR,
+  ESCROW,
+  GUILD,
+  TOTAL,
 } from './dao-types'
 
 import { 
-  userTokenBalances,
   members,
   memberAddressByDelegatekey,
   tokenWhiteList,
@@ -22,7 +25,6 @@ import {
   roles,
   reputationFactor,
   reputationFactors,
-  memberReputationFactors,
   Member,
   Proposal,
   proposals,
@@ -36,7 +38,8 @@ import {
   contributions,
   delegation,
   delegationInfo,
-  GenericObject
+  GenericObject,
+  tokenBalances
  } from './dao-models'
 
 import {
@@ -80,10 +83,9 @@ import {
   ERR_HAVE_LOOT,
   ERR_IN_JAIL,
   ERR_NOT_READY,
-  ERR_INVALID_ACCOUNT_ID,
-  ERR_INSUFFICIENT_BALANCE,
   ERR_NOT_A_MEMBER
 } from './dao-error-messages'
+import { assertValidId, predecessor } from "./utils"
 
 // HARD-CODED LIMITS
 // These numbers are quite arbitrary; they are small enough to avoid overflows when doing calculations
@@ -95,13 +97,8 @@ const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of shares tha
 const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
 const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank
 
-// *******************
-// INTERNAL ACCOUNTING
-// *******************
+
 let depositToken: string
-const GUILD: AccountId = 'fund.vitalpointai.testnet'
-const ESCROW: AccountId = 'escrow.vitalpointai.testnet'
-const TOTAL: AccountId = 'total.vitalpointai.testnet'
 
 
 // ********************
@@ -114,7 +111,6 @@ const TOTAL: AccountId = 'total.vitalpointai.testnet'
 * @param owner 
 */
 export function isOwner(summoner: AccountId): boolean {
-  assert(env.isValidAccountID(summoner), ERR_INVALID_ACCOUNT_ID)
   return summoner == storage.getSome<string>("summoner")
 }
 
@@ -124,10 +120,7 @@ export function isOwner(summoner: AccountId): boolean {
 * @param shareholder
 */
 export function onlyShareholder(shareholder: AccountId): boolean {
-  assert(env.isValidAccountID(shareholder), ERR_INVALID_ACCOUNT_ID)
-  assert(members.get(shareholder)!=null, ERR_NOT_A_MEMBER)
-  let shareholderExists = members.getSome(shareholder)
-  return u128.gt(shareholderExists.shares, u128.Zero) ? true : false
+  return Member.get(shareholder).hasShares()
 }
 
 /**
@@ -136,10 +129,8 @@ export function onlyShareholder(shareholder: AccountId): boolean {
 * @param member 
 */
 export function onlyMember(member: AccountId): boolean {
-  assert(env.isValidAccountID(member), ERR_INVALID_ACCOUNT_ID)
-  assert(members.contains(member), ERR_NOT_A_MEMBER)
-  let memberExists = members.getSome(member);
-  return u128.gt(memberExists.shares, u128.Zero) || u128.gt(memberExists.loot, u128.Zero) ? true : false
+  const _member = Member.get(member)
+  return _member.hasShares() || _member.hasLoot()
 }
 
 /**
@@ -148,10 +139,7 @@ export function onlyMember(member: AccountId): boolean {
 * @param delegate
 */
 export function onlyDelegate(delegate: AccountId): boolean {
-  assert(env.isValidAccountID(delegate), ERR_INVALID_ACCOUNT_ID)
-  assert(memberAddressByDelegatekey.contains(delegate), ERR_NOT_DELEGATE)
-  let memberDelegateExists = members.getSome(delegate)
-  return u128.gt(memberDelegateExists.shares, u128.Zero) ? true : false
+  return Member.getDelegate(delegate).hasShares()
 }
 
 
@@ -196,15 +184,15 @@ export function init(
   assert(_approvedTokens.length <= MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_TOKENS)
   assert(u128.le(_shares, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
   assert(u128.gt(_shares, u128.Zero), 'invalid contribution')
-  assert(env.isValidAccountID(_contractId), ERR_INVALID_ACCOUNT_ID)
-  assert(u128.eq(Context.attachedDeposit, u128.mul(_shares, u128.from('1000000000000000000000000'))), 'attached deposit must match shares')
+  assertValidId(_contractId);
+  assert(u128.eq(Context.attachedDeposit, u128.mul(_shares, ONE_NEAR)), 'attached deposit must match shares')
  
   depositToken = _approvedTokens[0]
   storage.set<string>('depositToken', depositToken)
 
   for (let i: i32 = 0; i < _approvedTokens.length; i++) {
     if(_approvedTokens[i] != 'Ⓝ' ){
-    assert(env.isValidAccountID(_approvedTokens[i]), ERR_INVALID_ACCOUNT_ID)
+    assertValidId(_approvedTokens[i]);
     }
     if(tokenWhiteList.contains(_approvedTokens[i])) {
       assert(!tokenWhiteList.getSome(_approvedTokens[i]), ERR_DUPLICATE_TOKEN)
@@ -215,7 +203,7 @@ export function init(
   }
   
   //set Summoner
-  storage.set<string>('summoner', Context.predecessor)
+  storage.set<string>('summoner', predecessor())
 
   //set periodDuration
   storage.set<i32>('periodDuration', _periodDuration)
@@ -239,9 +227,9 @@ export function init(
   storage.set<u64>('summoningTime', Context.blockTimestamp)
 
   //set initial Guild/Escrow/Total address balances
-  userTokenBalances.push({user: GUILD, token: depositToken, balance: u128.Zero})
-  userTokenBalances.push({user: ESCROW, token: depositToken, balance: u128.Zero})
-  userTokenBalances.push({user: TOTAL, token: depositToken, balance: u128.Zero})
+  tokenBalances.add(GUILD, depositToken)
+  tokenBalances.add(ESCROW, depositToken)
+  tokenBalances.add(TOTAL, depositToken)
   storage.set<i32>('totalGuildBankTokens', 0)
   storage.set<u128>('totalShares', u128.Zero)
   storage.set<u128>('totalLoot', u128.Zero)
@@ -251,10 +239,7 @@ export function init(
   let transferred = _sT(_shares, depositToken, _contractId)
 
   if(transferred) {
-    _addToBalance(Context.predecessor, depositToken, _shares)
-    _addToBalance(GUILD, depositToken, _shares)
-    _addToTotalBalance(depositToken, _shares)
-
+    tokenBalances.addTribute(predecessor(), depositToken, _shares);
     // *******************
     // ROLES INITIALIZATION
     // *******************
@@ -271,12 +256,12 @@ export function init(
     let availableRoles = roles.getSome(Context.contractName)
     let thisMemberRoles = new Array<communityRole>()
     thisMemberRoles.push(availableRoles[0])
-    memberRoles.set(Context.predecessor, thisMemberRoles)
+    memberRoles.set(predecessor(), thisMemberRoles)
 
     // makes member object for summoner and puts it into the members storage
-    members.set(Context.predecessor, 
+    members.set(predecessor(), 
       new Member(
-        Context.predecessor, 
+        predecessor(), 
         _shares, 
         u128.Zero, 
         u128.Zero, 
@@ -294,7 +279,7 @@ export function init(
     let currentMembers = storage.getSome<u128>('totalMembers')
     storage.set('totalMembers', u128.add(currentMembers, u128.from(1)))
 
-    memberAddressByDelegatekey.set(Context.predecessor, Context.predecessor)
+    memberAddressByDelegatekey.set(predecessor(), predecessor())
 
     storage.set<u128>('totalShares', _shares)
 
@@ -323,38 +308,15 @@ export function setInit(
   _dilutionBound: DilutionBound,
   _voteThreshold: VoteThreshold
 ): u64 {
-assert(isOwner(Context.predecessor), 'not the owner')
-assert(_periodDuration > 0, ERR_MUSTBE_GREATERTHAN_ZERO)
-assert(_votingPeriodLength > 0, ERR_MUSTBE_GREATERTHAN_ZERO)
-assert(_votingPeriodLength <= MAX_VOTING_PERIOD_LENGTH, ERR_MUSTBELESSTHAN_MAX_VOTING_PERIOD_LENGTH)
-assert(_gracePeriodLength <= MAX_GRACE_PERIOD_LENGTH, ERR_MUSTBELESSTHAN_MAX_GRACE_PERIOD_LENGTH)
-assert(_dilutionBound > 0, ERR_DILUTIONBOUND_ZERO)
-assert(_dilutionBound <= MAX_DILUTION_BOUND, ERR_DILUTIONBOUND_LIMIT)
-assert(_voteThreshold <= 100, 'must be between 1 and 100')
-assert(_voteThreshold > 0, 'must be between 0 and 100')
-
-//set periodDuration
-storage.set<i32>('periodDuration', _periodDuration)
-
-//set votingPeriodLength
-storage.set<i32>('votingPeriodLength', _votingPeriodLength)
-
-//set gracePeriodLength
-storage.set<i32>('gracePeriodLength', _gracePeriodLength)
-
-//set proposalDeposit
-storage.set<u128>('proposalDeposit', _proposalDeposit)
-
-//set dilutionBound
-storage.set<i32>('dilutionBound', _dilutionBound)
-
-//set voteThreshold
-storage.set<i32>('voteThreshold', _voteThreshold)
-
-//set dao update time
-storage.set<u64>('updated', Context.blockTimestamp)
-
-return Context.blockTimestamp
+assert(isOwner(predecessor()), 'not the owner')
+return _setInit(
+  _periodDuration,
+  _votingPeriodLength,
+  _gracePeriodLength,
+  _proposalDeposit,
+  _dilutionBound,
+  _voteThreshold
+);
 }
 
 
@@ -419,16 +381,16 @@ return Context.blockTimestamp
  * @param token
  * @param amount (in NEAR not yocto)
 */
-function _addToBalance(account: AccountId, token: AccountId, amount: u128): void {
-  if(_userTokenBalanceExists(account, token)){
-    let index = getUserTokenBalanceIndex(account, token)
-    let record = userTokenBalances[index]
-    record.balance = u128.add(record.balance, amount)
-    userTokenBalances[index] = record
-  } else {
-    userTokenBalances.push({user: account, token: token, balance: amount})
-  }
-}
+// function _addToBalance(account: AccountId, token: AccountId, amount: u128): void {
+//   if(_userTokenBalanceExists(account, token)){
+//     const tokenMap = userTokenMap.getSome(account);
+//     let balance = tokenMap.getSome(token);
+//     balance = u128.add(balance, amount)
+//     tokenMap.set(token, balance);
+//   } else {
+//     userTokenBalances.push({user: account, token: token, balance: amount})
+//   }
+// }
 
 
 /**
@@ -437,12 +399,12 @@ function _addToBalance(account: AccountId, token: AccountId, amount: u128): void
  * @param token
  * @param amount (in NEAR not yocto)
 */
-function _addToTotalBalance(token: AccountId, amount: u128): void {
-  let totalIndex = getUserTokenBalanceIndex(TOTAL, token)
-  let totalRecord = userTokenBalances[totalIndex]
-  totalRecord.balance = u128.add(totalRecord.balance, amount)
-  userTokenBalances[totalIndex] = totalRecord
-}
+// function _addToTotalBalance(token: AccountId, amount: u128): void {
+//   let totalIndex = getUserTokenBalanceIndex(TOTAL, token)
+//   let totalRecord = userTokenBalances[totalIndex]
+//   totalRecord.balance = u128.add(totalRecord.balance, amount)
+//   userTokenBalances[totalIndex] = totalRecord
+// }
 
 
 /**
@@ -450,17 +412,11 @@ function _addToTotalBalance(token: AccountId, amount: u128): void {
  * @param user
  * @param token
 */
-function _userTokenBalanceExists(user: AccountId, token: AccountId): bool {
-  let userTokenBalancesLength = userTokenBalances.length
-  let i = 0
-    while (i < userTokenBalancesLength) {
-      if (userTokenBalances[i].user == user && userTokenBalances[i].token == token) {
-        return true
-      }
-      i++
-  }
-  return false
-}
+// function _userTokenBalanceExists(user: AccountId, token: AccountId): bool {
+//   const map = userTokenMap.get(user)
+//   if (map == null) return false;
+//   return map.contains(token);
+// }
 
 
 /**
@@ -469,14 +425,14 @@ function _userTokenBalanceExists(user: AccountId, token: AccountId): bool {
  * @param token
  * @param amount (in NEAR not yocto)
 */
-function _subtractFromBalance(account: AccountId, token: AccountId, amount: u128): void {
-  if(_userTokenBalanceExists(account, token)){
-    let index = getUserTokenBalanceIndex(account, token)
-    let record = userTokenBalances[index]
-    record.balance = u128.sub(record.balance, amount)
-    userTokenBalances[index] = record
-  }
-}
+// function _subtractFromBalance(account: AccountId, token: AccountId, amount: u128): void {
+//   if(_userTokenBalanceExists(account, token)){
+//     let index = getUserTokenBalanceIndex(account, token)
+//     let record = userTokenBalances[index]
+//     record.balance = u128.sub(record.balance, amount)
+//     userTokenBalances[index] = record
+//   }
+// }
 
 /**
  * Internal function that decrements the total tokens held in the community for that type
@@ -484,12 +440,12 @@ function _subtractFromBalance(account: AccountId, token: AccountId, amount: u128
  * @param token
  * @param amount (in NEAR not yocto)
 */
-function _subtractFromTotalBalance(token: AccountId, amount: u128): void {
-  let totalIndex = getUserTokenBalanceIndex(TOTAL, token)
-  let totalRecord = userTokenBalances[totalIndex]
-  totalRecord.balance = u128.sub(totalRecord.balance, amount)
-  userTokenBalances[totalIndex] = totalRecord
-}
+// function _subtractFromTotalBalance(token: AccountId, amount: u128): void {
+//   let totalIndex = getUserTokenBalanceIndex(TOTAL, token)
+//   let totalRecord = userTokenBalances[totalIndex]
+//   totalRecord.balance = u128.sub(totalRecord.balance, amount)
+//   userTokenBalances[totalIndex] = totalRecord
+// }
 
 
 /**
@@ -500,9 +456,8 @@ function _subtractFromTotalBalance(token: AccountId, amount: u128): void {
  * @param amount (in NEAR not yocto)
 */
 function _internalTransfer(from: AccountId, to: AccountId, token: AccountId, amount: u128): void {
-  assert(env.isValidAccountID(from), ERR_INVALID_ACCOUNT_ID)
-  _subtractFromBalance(from, token, amount)
-  _addToBalance(to, token, amount)
+  assertValidId(from)
+  tokenBalances.transfer(from, to, token, amount)
 }
 
 
@@ -582,13 +537,13 @@ function _didPass(proposal: Proposal): bool {
   }
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
-  if(u128.gt(proposal.paymentRequested, u128.from(getUserTokenBalance(GUILD, proposal.paymentToken)))) {
+  if(tokenBalances.hasBalanceFor(GUILD, proposal.paymentToken, proposal.paymentRequested)){
     didPass = false
   }
   
   //Make the proposal fail if it would result in too many tokens with non-zero balance in guild bank
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
-  if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
+  if(u128.gt(proposal.tributeOffered, u128.Zero) && tokenBalances.isZero(GUILD, proposal.tributeToken) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
     didPass = false
   }
   
@@ -601,7 +556,7 @@ function _didPass(proposal: Proposal): bool {
  * @param to
 */
 function _returnDeposit(to: AccountId): bool {
-  assert(env.isValidAccountID(to), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(to)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
   let transferred = _sT(proposalDeposit, depositToken, to)
@@ -619,8 +574,8 @@ function _returnDeposit(to: AccountId): bool {
  * @param lootToBurn
 */
 export function ragequit(sharesToBurn: u128, lootToBurn: u128): bool {
-  assert(onlyMember(Context.predecessor), ERR_NOT_A_MEMBER)
-  _ragequit(Context.predecessor, sharesToBurn, lootToBurn)
+  assert(onlyMember(predecessor()), ERR_NOT_A_MEMBER)
+  _ragequit(predecessor(), sharesToBurn, lootToBurn)
   return true
 }
 
@@ -665,16 +620,14 @@ function _ragequit(memberAddress: AccountId, sharesToBurn: u128, lootToBurn: u12
   let approvedTokensLength = approvedTokens.length
   let i: i32 = 0
   while (i < approvedTokensLength) {
-    let amountToRagequit = _fairShare(getUserTokenBalance(GUILD, approvedTokens[i]), sharesAndLootToBurn, initialTotalSharesAndLoot)
+    let amountToRagequit = _fairShare(tokenBalances.get(GUILD, approvedTokens[i]), sharesAndLootToBurn, initialTotalSharesAndLoot)
     if (u128.gt(amountToRagequit, u128.Zero)) {
 
       // transfer to user
       let transferred = _sT(amountToRagequit, approvedTokens[i], memberAddress)
 
       if(transferred) {
-        _subtractFromBalance(memberAddress, approvedTokens[i], amountToRagequit)
-        _subtractFromBalance(GUILD, approvedTokens[i], amountToRagequit)
-        _subtractFromTotalBalance(approvedTokens[i], amountToRagequit)
+        tokenBalances.withdrawFromGuild(memberAddress, approvedTokens[i], amountToRagequit)
       }
 
     }
@@ -709,9 +662,9 @@ export function withdrawBalance(token: AccountId, amount: u128, to: AccountId): 
  * @param to
 */
 function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
-  assert(env.isValidAccountID(to), ERR_INVALID_ACCOUNT_ID)
-  assert(to == Context.predecessor, 'not account that is withdrawing')
-  assert(u128.ge(getUserTokenBalance(to, token), amount), ERR_INSUFFICIENT_BALANCE)
+  assertValidId(to)
+  assert(to == predecessor(), 'not account that is withdrawing')
+  tokenBalances.assertBalance(to, token, amount);
 
   let fairShare = getCurrentShare(to)
   assert(u128.le(amount, fairShare), 'asking to withdraw more than fair share of the fund')
@@ -719,8 +672,7 @@ function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
   let transferred = _sT(amount, token, to)
 
   if(transferred) {
-    _subtractFromBalance(to, token, amount)
-    _subtractFromTotalBalance(token, amount)
+    tokenBalances.withdrawFromTotal(to, token, amount);
     return true
   }
   return false
@@ -736,7 +688,7 @@ function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
 export function cancelProposal(proposalId: i32, tribute: u128, loot: u128): Proposal {
   
   let proposal = proposals[proposalId]
-  assert(proposal.proposer == Context.predecessor, 'not the proposer')
+  assert(proposal.proposer == predecessor(), 'not the proposer')
   assert(!proposal.flags[0], ERR_ALREADY_SPONSORED)
   assert(!proposal.flags[3], ERR_ALREADY_CANCELLED)
  
@@ -755,9 +707,7 @@ export function cancelProposal(proposalId: i32, tribute: u128, loot: u128): Prop
     let secondTransfer = _sT(totalSharesLoot, proposal.tributeToken, proposal.proposer)
 
     if(secondTransfer) {
-    _subtractFromBalance(proposal.proposer, proposal.tributeToken, totalSharesLoot)
-    _subtractFromBalance(ESCROW, proposal.tributeToken, totalSharesLoot)
-    _subtractFromTotalBalance(proposal.tributeToken, totalSharesLoot)
+      tokenBalances.withdrawFromGuild(proposal.proposer, proposal.tributeToken, totalSharesLoot)
     }
     return proposal
   }
@@ -772,10 +722,10 @@ export function cancelProposal(proposalId: i32, tribute: u128, loot: u128): Prop
  * @param amount
 */
 export function makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
-  assert(env.isValidAccountID(contractId), ERR_INVALID_ACCOUNT_ID)
-  assert(env.isValidAccountID(contributor), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(contractId)
+  assertValidId(contributor)
   assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
-  assert(u128.eq(Context.attachedDeposit, u128.mul(amount, u128.from('1000000000000000000000000'))), 'attached deposit must match donation amount')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(amount, ONE_NEAR)), 'attached deposit must match donation amount')
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
   let donationId = contributions.length
@@ -790,8 +740,7 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
   let transferred = _sT(amount, token, contractId)
 
   if(transferred) {
-    _addToBalance(GUILD, token, amount)
-    _addToTotalBalance(token, amount)
+    tokenBalances.addToGuild(token, amount)
 
     return true
   } else {
@@ -947,7 +896,7 @@ function _proposalPassed(proposalIndex: i32, proposal: Proposal): bool {
   storage.set<u128>('totalLoot', newTotalLoot)
 
   // if the proposal tribute is the first tokens of its kind to make it into the guild bank, increment total guild bank tokens
-  if(u128.eq(getUserTokenBalance(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(proposal.tributeOffered, u128.Zero)) {
+  if(tokenBalances.isZero(GUILD, proposal.tributeToken) && u128.gt(proposal.tributeOffered, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens + 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
@@ -1102,8 +1051,7 @@ function _proposalPassed(proposalIndex: i32, proposal: Proposal): bool {
       let transferred = _sT(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
 
       if(transferred) {
-        _subtractFromBalance(ESCROW, proposal.paymentToken, proposal.paymentRequested)
-        _subtractFromTotalBalance(proposal.paymentToken, proposal.paymentRequested)
+        tokenBalances.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
       }
     }
   }
@@ -1112,7 +1060,7 @@ function _proposalPassed(proposalIndex: i32, proposal: Proposal): bool {
   _internalTransfer(ESCROW, GUILD, proposal.tributeToken, proposal.tributeOffered)
 
   // if the proposal spends 100% of guild bank balance for a token, decrement total guild bank tokens
-  if(u128.eq(getUserTokenBalance(GUILD, proposal.paymentToken), u128.Zero) && u128.gt(proposal.paymentRequested, u128.Zero)) {
+  if(tokenBalances.isZero(GUILD, proposal.paymentToken) && u128.gt(proposal.paymentRequested, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens - 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
@@ -1135,10 +1083,7 @@ function _proposalFailed(proposal: Proposal): bool {
     let withdrawn = _sT(totalSharesAndLoot, proposal.tributeToken, proposal.proposer)
 
     if(withdrawn) {
-      _subtractFromBalance(proposal.proposer, proposal.tributeToken, totalSharesAndLoot)
-      _subtractFromBalance(ESCROW, proposal.tributeToken, totalSharesAndLoot)
-      _subtractFromTotalBalance(proposal.tributeToken, totalSharesAndLoot)
-    
+      tokenBalances.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesAndLoot)
     return true
     }
   }
@@ -1165,8 +1110,8 @@ function _nearTransfer(amount: u128, account: AccountId): bool {
  * @param account (where it's being transferred to)
 */
 function _sT(tO: u128, tT: AccountId, account: AccountId): bool {
-  assert(env.isValidAccountID(account), ERR_INVALID_ACCOUNT_ID)
-  let amountConvert = u128.mul(tO, u128.from('1000000000000000000000000'))
+  assertValidId(account)
+  let amountConvert = u128.mul(tO, ONE_NEAR)
 
   // NEAR transfers
   if(tT == storage.getSome<string>('depositToken')) {
@@ -1189,7 +1134,7 @@ function _sT(tO: u128, tT: AccountId, account: AccountId): bool {
  * @param account (where it's being transferred to)
 */
 function _sTRaw(tO: u128, tT: AccountId, account: AccountId): bool {
-  assert(env.isValidAccountID(account), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(account)
 
   // NEAR transfers
   if(tT == storage.getSome<string>('depositToken')) {
@@ -1313,42 +1258,6 @@ export function getPeriodDuration(): i32 {
   return storage.getSome<i32>("periodDuration")
 }
 
-
-/**
- * returns whether account called is currently a member of the community DAO
-*/
-export function getMemberStatus(member: AccountId): bool {
-  if(members.get(member)){
-    return true
-  }
-  return false
-}
-
-
-/**
- * returns number of shares (voting), the member has
-*/
-export function getMemberShares(member: AccountId): u128 {
-  if(members.get(member) != null) {
-    let shares = members.getSome(member).shares
-    return shares
-  }
-  return u128.Zero
-}
-
-
-/**
- * returns the amount of loot (non-voting shares) a member has
-*/
-export function getMemberLoot(member: AccountId): u128 {
-  if(members.get(member) != null) {
-    let loot = members.getSome(member).loot
-    return loot
-  }
-  return u128.Zero
-}
-
-
 /**
  * returns all the information stored on chain about a community DAO member
  * see the member data model for what that is
@@ -1395,22 +1304,6 @@ export function getProposalFlags(proposalId: i32): bool[] {
 
 
 /**
- * returns user token balance for a given user and token type
-*/
-export function getUserTokenBalance(user: AccountId, token: AccountId): u128 {
-  let userTokenBalanceLength = userTokenBalances.length
-  let i : i32 = 0
-  while (i < userTokenBalanceLength ) {
-    if(userTokenBalances[i].user == user && userTokenBalances[i].token == token) {
-      return userTokenBalances[i].balance
-    }
-    i++
-  }
-  return u128.Zero
-}
-
-
-/**
  * returns all balances for all tokens in the guild (community fund)
 */
 export function getGuildTokenBalances(): Array<TokenBalances> {
@@ -1418,7 +1311,7 @@ export function getGuildTokenBalances(): Array<TokenBalances> {
   let approvedTokensLength = approvedTokens.length
   let i = 0
   while (i < approvedTokensLength) {
-    let balance = getUserTokenBalance(GUILD, approvedTokens[i])
+    let balance = tokenBalances.get(GUILD, approvedTokens[i])
     balances.push({token: approvedTokens[i], balance: balance})
     i++
   }
@@ -1434,7 +1327,7 @@ export function getEscrowTokenBalances(): Array<TokenBalances> {
   let approvedTokensLength = approvedTokens.length
   let i = 0
   while (i < approvedTokensLength) {
-    let balance = getUserTokenBalance(ESCROW, approvedTokens[i])
+    let balance = tokenBalances.get(ESCROW, approvedTokens[i])
     balances.push({token: approvedTokens[i], balance: balance})
     i++
   }
@@ -1469,7 +1362,7 @@ export function getCurrentShare(member: AccountId): u128 {
   let totalLoot = storage.getSome<u128>('totalLoot')
   let depositToken = storage.getSome<string>('depositToken')
   let totalSharesAndLoot = u128.add(totalShares, totalLoot)
-  let fairShare = _fairShare(getUserTokenBalance(GUILD, depositToken), u128.add(thisMember.shares, thisMember.loot), totalSharesAndLoot)
+  let fairShare = _fairShare(tokenBalances.get(GUILD, depositToken), u128.add(thisMember.shares, thisMember.loot), totalSharesAndLoot)
   return fairShare
 }
 
@@ -1543,26 +1436,6 @@ export function getDonationIndex(donationId: i32): i32 {
     }
   return -1
 }
-
-
-/**
- * returns index of a user's token balance 
- * -1 indicates not present
-*/
-export function getUserTokenBalanceIndex(user: AccountId, token: AccountId): i32 {
-  let userTokenBalancesLength = userTokenBalances.length
-  let i = 0
-  if (userTokenBalancesLength != 0) {
-    while (i < userTokenBalancesLength) {
-      if (userTokenBalances[i].user == user && userTokenBalances[i].token == token) {
-        return i
-      }
-      i++
-    }
-  }
-  return -1
-}
-
 
 /**
  * returns current number of proposals 
@@ -1653,7 +1526,7 @@ export function submitMemberProposal (
 ): bool {
   assert(u128.le(u128.add(sharesRequested, lootRequested), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
   assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
-  assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(applicant)
   assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
   assert(members.get(applicant) == null, 'already a member')
   assert(_memberProposalPresent(applicant) == false, 'member proposal already in progress')
@@ -1662,7 +1535,7 @@ export function submitMemberProposal (
     assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
   }
   
-  if(u128.gt(tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, tributeToken), u128.Zero)) {
+  if(u128.gt(tributeOffered, u128.Zero) && tokenBalances.isZero(GUILD, tributeToken)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
   }
@@ -1671,14 +1544,12 @@ export function submitMemberProposal (
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let contribution = u128.add(tributeOffered, lootRequested)
   let totalAmount = u128.add(proposalDeposit, contribution)
-  assert(u128.eq(Context.attachedDeposit, u128.mul(u128.add(contribution, proposalDeposit), u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(u128.add(contribution, proposalDeposit), ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(totalAmount, tributeToken, contractId)
 
   if(transferred) {
-    _addToBalance(Context.predecessor, tributeToken, contribution)
-    _addToBalance(ESCROW, tributeToken, contribution)
-    _addToTotalBalance(tributeToken, contribution)
+    tokenBalances.addToEscrow(predecessor(), tributeToken, contribution)
 
     let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     flags[6] = true // member proposal
@@ -1727,7 +1598,7 @@ export function submitPayoutProposal (
   contractId: AccountId
 ): bool {
 assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
-assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+assertValidId(applicant)
 assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
 
 if(members.contains(applicant)) {
@@ -1737,7 +1608,7 @@ if(members.contains(applicant)) {
 // Funds transfers
 let proposalDeposit = storage.getSome<u128>('proposalDeposit')
 let depositToken = storage.getSome<string>('depositToken')
-assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
 let transferred = _sT(proposalDeposit, depositToken, contractId)
 
@@ -1785,14 +1656,14 @@ export function submitTributeProposal (
 ): bool {
 assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
 assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
-assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+assertValidId(applicant)
 assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
 
 if(members.contains(applicant)) {
   assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
 }
 
-if(u128.gt(tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, tributeToken), u128.Zero)) {
+if(u128.gt(tributeOffered, u128.Zero) && tokenBalances.isZero(GUILD, tributeToken)) {
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
 }
@@ -1800,14 +1671,12 @@ if(u128.gt(tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, trib
 // Funds transfers
 let proposalDeposit = storage.getSome<u128>('proposalDeposit')
 let totalContribution = u128.add(proposalDeposit, tributeOffered)
-assert(u128.eq(Context.attachedDeposit, u128.mul(totalContribution, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+assert(u128.eq(Context.attachedDeposit, u128.mul(totalContribution, ONE_NEAR)), 'attached deposit not correct')
 
 let transferred = _sT(totalContribution, tributeToken, contractId)
 
 if(transferred) {
-  _addToBalance(applicant, tributeToken, tributeOffered)
-  _addToBalance(ESCROW, tributeToken, tributeOffered)
-  _addToTotalBalance(tributeToken, tributeOffered)
+  tokenBalances.addToEscrow(applicant, tributeToken, tributeOffered)
 
   let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
   flags[9] = true // tribute proposal
@@ -1854,7 +1723,7 @@ export function submitCommitmentProposal(
   contractId: AccountId
   ): bool {
   assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
-  assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(applicant)
   assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
   assert(u128.gt(paymentRequested, u128.Zero), 'funding request must be greater than zero')
   
@@ -1865,7 +1734,7 @@ export function submitCommitmentProposal(
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -1906,7 +1775,7 @@ export function submitConfigurationProposal(
   configuration: Array<string>, 
   contractId: AccountId
   ): bool {
-  assert(env.isValidAccountID(applicant), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(applicant)
   assert(applicant != GUILD && applicant != ESCROW && applicant != TOTAL, ERR_RESERVED)
   
   if(members.contains(applicant)) {
@@ -1916,7 +1785,7 @@ export function submitConfigurationProposal(
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -1959,7 +1828,7 @@ export function submitOpportunityProposal(
   creator: AccountId,
   contractId: AccountId
   ): bool {
-  assert(env.isValidAccountID(creator), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(creator)
   assert(creator != GUILD && creator != ESCROW && creator != TOTAL, ERR_RESERVED)
   
   if(members.contains(creator)) {
@@ -1970,7 +1839,7 @@ export function submitOpportunityProposal(
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -2025,7 +1894,7 @@ export function submitGuildKickProposal(
     // Funds transfers
     let proposalDeposit = storage.getSome<u128>('proposalDeposit')
     let depositToken = storage.getSome<string>('depositToken')
-    assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+    assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
     let transferred = _sT(proposalDeposit, depositToken, contractId)
 
@@ -2065,13 +1934,13 @@ export function submitGuildKickProposal(
  * @param contractId
 */
 export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToken: AccountId, contractId: AccountId): bool {
-  assert(env.isValidAccountID(tokenToWhitelist), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(tokenToWhitelist)
   assert(!tokenWhiteList.getSome(tokenToWhitelist), ERR_ALREADY_WHITELISTED)
   assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_WHITELISTED)
 
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -2128,12 +1997,12 @@ export function submitCommunityRoleProposal(
   action: string, // add, remove, edit, nil
   contractId: AccountId
   ): bool {
-  assert(env.isValidAccountID(contractId), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(contractId)
   
   // Funds transfers (Proposal Deposit)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -2204,12 +2073,12 @@ export function submitAssignRoleProposal(
   action: string, // add, remove, edit, nil
   contractId: AccountId
   ): bool {
-  assert(env.isValidAccountID(contractId), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(contractId)
   
   // Funds transfers (Proposal Deposit)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -2278,12 +2147,12 @@ export function submitReputationFactorProposal(
   action: string, // add, edit, delete, nil
   contractId: AccountId
   ): bool {
-  assert(env.isValidAccountID(contractId), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(contractId)
   
   // Funds transfers (Proposal Deposit)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)  
 
@@ -2363,7 +2232,7 @@ function _submitProposal(
   proposals.push(new Proposal(
     proposalId, // proposal Id
     applicant, // applicant
-    Context.predecessor, // proposer
+    predecessor(), // proposer
     '', // sponsor
     sharesRequested, // sharesRequested
     lootRequested, // lootRequested
@@ -2388,7 +2257,7 @@ function _submitProposal(
     referenceIds // references to other proposals
   ))
   
-  votesByMember.push({user: Context.predecessor, proposalId: proposalId, vote: ''})
+  votesByMember.push({user: predecessor(), proposalId: proposalId, vote: ''})
   
   return true
 }
@@ -2406,7 +2275,7 @@ export function sponsorProposal(
   contractId: AccountId
   ): bool {
  
-  assert(onlyDelegate(Context.predecessor), 'not a delegate')
+  assert(onlyDelegate(predecessor()), 'not a delegate')
 
   let proposalIndex = getProposalIndex(proposalId)
   let proposal = proposals[proposalIndex]
@@ -2420,14 +2289,14 @@ export function sponsorProposal(
   // i.e., is less than what is in the community fund
   if(proposal.flags[7]) {
     //get guild token balances
-    let balance = getUserTokenBalance(GUILD, proposal.paymentToken)
+    let balance = tokenBalances.get(GUILD, proposal.paymentToken)
     assert(u128.le(proposal.paymentRequested, balance), 'potential commitment must be less than what is in the community fund')
   }
 
   // collect proposal deposit from sponsor and store it in the contract until the proposal is processed
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, u128.from('1000000000000000000000000'))), 'attached deposit not correct')
+  assert(u128.eq(Context.attachedDeposit, u128.mul(proposalDeposit, ONE_NEAR)), 'attached deposit not correct')
 
   let transferred = _sT(proposalDeposit, depositToken, contractId)
 
@@ -2437,7 +2306,7 @@ export function sponsorProposal(
       assert(members.getSome(proposal.applicant).jailed == 0, 'member jailed')
     }
 
-    if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(getUserTokenBalance(GUILD, proposal.tributeToken), u128.Zero)) {
+    if(u128.gt(proposal.tributeOffered, u128.Zero) && tokenBalances.isZero(GUILD, proposal.tributeToken)) {
       let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
       assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, 'guild bank full')
     }
@@ -2465,7 +2334,7 @@ export function sponsorProposal(
     let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength')
     let gracePeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') + storage.getSome<i32>('gracePeriodLength')
 
-    let memberAddress = memberAddressByDelegatekey.getSome(Context.predecessor)
+    let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
 
     let flags = proposal.flags //
     flags[0] = true //sponsored
@@ -2491,10 +2360,10 @@ export function sponsorProposal(
 */
 export function submitVote(proposalId: i32, vote: string): bool {
 
-  assert(onlyDelegate(Context.predecessor), ERR_NOT_DELEGATE)
+  assert(onlyDelegate(predecessor()), ERR_NOT_DELEGATE)
 
   // ensures voting address has voting shares
-  let memberAddress = memberAddressByDelegatekey.getSome(Context.predecessor)
+  let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
   let member = members.getSome(memberAddress)
 
   // check that proposal exists by finding it's index in the proposal vector
@@ -2509,10 +2378,10 @@ export function submitVote(proposalId: i32, vote: string): bool {
   assert(getCurrentPeriod() <= proposal.votingPeriod, ERR_VOTING_PERIOD_EXPIRED)
   
   // check to see if this member has already voted
-  let existingVote = getMemberProposalVote(Context.predecessor, proposalId)
+  let existingVote = getMemberProposalVote(predecessor(), proposalId)
   assert(existingVote == 'no vote yet', ERR_ALREADY_VOTED)
 
-  votesByMember.push({user: Context.predecessor, proposalId: proposalId, vote: vote})
+  votesByMember.push({user: predecessor(), proposalId: proposalId, vote: vote})
 
   if(vote == 'yes') {
     let allVotingShares = u128.add(member.shares, member.receivedDelegations)
@@ -2748,9 +2617,9 @@ function processGuildKickProposal(proposalId: i32): void {
  * @param appOwner
 */
 export function leave(contractId: AccountId, accountId: AccountId, share: u128, remainingBalance: u128, appOwner: AccountId): boolean {
-  assert(env.isValidAccountID(accountId), ERR_INVALID_ACCOUNT_ID)
-  assert(env.isValidAccountID(appOwner), ERR_INVALID_ACCOUNT_ID)
-  assert(accountId == Context.predecessor, 'only the account owner can leave the community')
+  assertValidId(accountId)
+  assertValidId(appOwner)
+  assert(accountId == predecessor(), 'only the account owner can leave the community')
  
   let depositToken = storage.getSome<string>('depositToken')
  
@@ -2765,13 +2634,11 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
 
   // transfer remaining contract balance (less fairshare already sent) to app owner
   // use _sTRaw as remaining will be in yocto
-  let remaining = u128.sub(remainingBalance, u128.mul(share, u128.from('1000000000000000000000000')))
+  let remaining = u128.sub(remainingBalance, u128.mul(share, ONE_NEAR))
   let transfer = _sTRaw(remaining, depositToken, appOwner)
 
   if(withdrawn && transfer) {
-    _subtractFromBalance(Context.predecessor, depositToken, share)
-    _subtractFromBalance(GUILD, depositToken, share)
-    _subtractFromTotalBalance(depositToken, share)
+    tokenBalances.withdrawFromGuild(predecessor(), depositToken, share)
 
     // check for last member and make donation if applicable
     let numberOfMembers = getTotalMembers()
@@ -2791,8 +2658,8 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
     storage.set<u128>('totalLoot', newTotalLoot)
 
     // remove share delegations
-    if(delegation.contains(Context.predecessor)){
-      let delegations = delegation.getSome(Context.predecessor)
+    if(delegation.contains(predecessor())){
+      let delegations = delegation.getSome(predecessor())
       let i: i32 = 0
       while (i < delegations.length){
           // Remove received delegations from those this member delegated to
@@ -2802,7 +2669,7 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
           i++
       }
       // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info
-      delegation.delete(Context.predecessor)
+      delegation.delete(predecessor())
     }
       
     // delete member
@@ -2826,24 +2693,24 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
  * @param quantity
 */
 export function delegate(delegateTo: string, quantity: u128): boolean {
-  assert(env.isValidAccountID(delegateTo), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(delegateTo)
   assert(u128.gt(quantity, u128.Zero), 'no share quantity specified')
-  assert(Context.predecessor == Context.sender, 'sender is not predecessor')
+  assert(predecessor() == Context.sender, 'sender is not predecessor')
 
   //get current number of shares of person attempting to delegate
-  let member = members.getSome(Context.predecessor)
+  let member = members.getSome(predecessor())
   assert(u128.ge(member.shares, quantity), 'member does not have enough shares to delegate')
 
-  //obtain Context.predecessor's map of vectors of existing delegations or start a new one
-  if(delegation.contains(Context.predecessor)){
-    let existingDelegations = delegation.getSome(Context.predecessor)
+  //obtain predecessor()'s map of vectors of existing delegations or start a new one
+  if(delegation.contains(predecessor())){
+    let existingDelegations = delegation.getSome(predecessor())
     let newDelegation = new delegationInfo(delegateTo, quantity)
     existingDelegations.push(newDelegation)
-    delegation.set(Context.predecessor, existingDelegations)
+    delegation.set(predecessor(), existingDelegations)
 
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
-    members.set(Context.predecessor, member)
+    members.set(predecessor(), member)
 
     // add quantity shares to the member receivedDelegations - tracks shares delegated to a member
     let delegate = members.getSome(delegateTo)
@@ -2854,11 +2721,11 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
     let existingDelegations = new PersistentVector<delegationInfo>('ed')
     let newDelegation = new delegationInfo(delegateTo, quantity)
     existingDelegations.push(newDelegation)
-    delegation.set(Context.predecessor, existingDelegations)
+    delegation.set(predecessor(), existingDelegations)
 
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
-    members.set(Context.predecessor, member)
+    members.set(predecessor(), member)
 
     // add quantity shares to the member receivedDelegations - tracks shares delegated to a member
     let delegate = members.getSome(delegateTo)
@@ -2877,22 +2744,22 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
  * @param quantity
 */
 export function undelegate(delegateFrom: string, quantity: u128): boolean {
-  assert(env.isValidAccountID(delegateFrom), ERR_INVALID_ACCOUNT_ID)
+  assertValidId(delegateFrom)
   assert(u128.gt(quantity, u128.Zero), 'quantity must be greater than zero')
 
   // get user's current delegations
-  let delegations = delegation.getSome(Context.predecessor)
+  let delegations = delegation.getSome(predecessor())
   let i: i32 = 0
   while (i < delegations.length){
     if(delegations[i].delegatedTo == delegateFrom && u128.gt(delegations[i].shares, u128.Zero)){
       assert(u128.le(quantity, delegations[i].shares), 'not enough shares delegated, lower quantity')
-      let member = members.getSome(Context.predecessor)
+      let member = members.getSome(predecessor())
      
       member.delegatedShares = u128.sub(member.delegatedShares, quantity)
-      members.set(Context.predecessor, member)
+      members.set(predecessor(), member)
 
       delegations[i].shares = u128.sub(delegations[i].shares, quantity)
-      delegation.set(Context.predecessor, delegations)
+      delegation.set(predecessor(), delegations)
 
       let delegatedMember = members.getSome(delegateFrom)
       delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, quantity)
@@ -2919,17 +2786,17 @@ export function undelegate(delegateFrom: string, quantity: u128): boolean {
 */
 export function updateDelegateKey(newDelegateKey: AccountId): bool {
 
-  assert(onlyShareholder(Context.predecessor), ERR_NOT_SHAREHOLDER)
-  assert(env.isValidAccountID(newDelegateKey), ERR_INVALID_ACCOUNT_ID)
+  assert(onlyShareholder(predecessor()), ERR_NOT_SHAREHOLDER)
+  assertValidId(newDelegateKey)
 
-  if(newDelegateKey != Context.predecessor) {
+  if(newDelegateKey != predecessor()) {
     assert(!members.getSome(newDelegateKey).existing, ERR_NO_OVERWRITE_MEMBER)
     assert(!members.getSome(memberAddressByDelegatekey.getSome(newDelegateKey)).existing, ERR_NO_OVERWRITE_KEY)
   }
 
-  let member = members.getSome(Context.predecessor)
+  let member = members.getSome(predecessor())
   memberAddressByDelegatekey.set(member.delegateKey, '')
-  memberAddressByDelegatekey.set(newDelegateKey, Context.predecessor)
+  memberAddressByDelegatekey.set(newDelegateKey, predecessor())
   member.delegateKey = newDelegateKey
 
   members.set(member.delegateKey, member)
