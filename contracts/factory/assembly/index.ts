@@ -4,8 +4,14 @@ import { DaoModel } from './model';
 // const CODE = includeBytes('../../../build/release/catalystdao.wasm')
 
 const CODE_KEY = "CODE";
+const CODE_KEY_LEN = String.UTF8.byteLength(CODE_KEY);
+const CODE_KEY_PTR = <u64>changetype<usize>(CODE_KEY);
 
 const OWNER_KEY = "OWNER";
+
+function assertOwner(): void {
+  assert(Context.sender == storage.getString(OWNER_KEY), "Only owner can set binary");
+}
 
 
 export function init(ownerId: string): void {
@@ -15,9 +21,14 @@ export function init(ownerId: string): void {
 }
 
 export function setBinary(): void {
-  assert(Context.sender == storage.getString(OWNER_KEY), "Only owner can set binary");
+  assertOwner();
   env.input(10);
-  env.storage_write(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), U64.MAX_VALUE, 10, 11);
+  env.storage_write(CODE_KEY_LEN, CODE_KEY_PTR, U64.MAX_VALUE, 10, 11);
+}
+
+export function deleteBinary(): void {
+  assertOwner();
+  env.storage_remove(CODE_KEY_LEN, CODE_KEY_PTR, 0);
 }
 
 let daos = new AVLTree<u32, DaoModel>('M')
