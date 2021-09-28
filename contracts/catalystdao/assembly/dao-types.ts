@@ -17,3 +17,24 @@ export type DilutionBound = i32
 /** minimum % of total vote required for a proposal to pass - default - 51% */
 export type VoteThreshold = i32 
 
+export const ONE_NEAR = u128.from('1000000000000000000000000')
+
+// *******************
+// INTERNAL ACCOUNTING
+// *******************
+export const GUILD: AccountId = 'fund.vitalpointai.testnet'
+export const ESCROW: AccountId = 'escrow.vitalpointai.testnet'
+export const TOTAL: AccountId = 'total.vitalpointai.testnet'
+
+// *****************
+// HARD-CODED LIMITS
+// These numbers are quite arbitrary; they are small enough to avoid overflows
+// when doing calculations with periods or shares, yet big enough to not limit 
+// reasonable use cases.
+// *****************
+export const MAX_VOTING_PERIOD_LENGTH: i32 = 10**8 // maximum length of voting period
+export const MAX_GRACE_PERIOD_LENGTH:i32 = 10**8 // maximum length of grace period
+export const MAX_DILUTION_BOUND: i32 = 10**8 // maximum dilution bound
+export const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of shares that can be minted
+export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
+export const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank

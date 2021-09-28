@@ -1,9 +1,134 @@
-import { u128, PersistentMap, PersistentVector } from 'near-sdk-as'
-import { AccountId } from './dao-types'
+import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap } from 'near-sdk-as'
+import { ERR_INSUFFICIENT_BALANCE, ERR_NOT_A_MEMBER, ERR_NOT_DELEGATE } from './dao-error-messages'
+import { AccountId, ESCROW, GUILD, TOTAL } from './dao-types'
+import { isPositive } from './utils'
+
+
+export type TokenName = string
+export type Balance = u128
+
+/** Maps token name to balance */
+export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
+
+/**
+ * Class to track the balances of users for various tokens.
+ */
+ class TokenAccounting {
+    /** Outer most map  */
+   userTokenMap: PersistentMap<AccountId, TokenBalanceMap>;
+   
+    constructor(private prefix: string){
+      // Don't need the generic type since they are declared above.
+      this.userTokenMap = new PersistentMap(prefix);
+    }
+  
+    private getTokenMap(account: AccountId): TokenBalanceMap {
+      let tokenMap = this.userTokenMap.get(account);
+      if (tokenMap == null) {
+        tokenMap = new PersistentUnorderedMap(this.prefix + account);
+      }
+      return tokenMap;
+    }
+  
+    /** Sets a users balance for a token and creates inner map if not present. */
+    add(account: AccountId, token: TokenName, balance: Balance = u128.Zero): void {
+      const tokenMap = this.getTokenMap(account);
+      tokenMap.set(token, u128.add(tokenMap.get(token, u128.Zero) as u128, balance));
+      this.userTokenMap.set(account, tokenMap);
+    }
+  
+    sub(account: AccountId, token: TokenName, balance: Balance): void {
+      const tokenMap = this.getTokenMap(account);
+      tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
+      this.userTokenMap.set(account, tokenMap);
+    }
+  
+    get(account: AccountId, token: TokenName): u128 {
+      let tokenMap = this.userTokenMap.get(account);
+      if (tokenMap == null) return u128.Zero;
+      // Need the as below to tell the IDE that it won't return null
+      return tokenMap.get(token, u128.Zero) as u128;
+    }
+  
+    addContribution(account: AccountId, token: TokenName, balance: Balance): void {
+      this.add(account, token, balance);
+      this.add(GUILD, token, balance);
+      this.add(TOTAL, token, balance);
+    }
+  
+    transfer(from: AccountId, to: AccountId, token: string, balance: Balance): void {
+      this.assertBalance(from, token, balance);
+      this.sub(from, token, balance);
+      this.add(to, token, balance);
+    }
+  
+    hasBalanceFor(account: AccountId, token: TokenName, balance: Balance): boolean {
+      const fromBalance = this.get(account, token);
+      return u128.gt(fromBalance, balance) as boolean;
+    }
+  
+    assertBalance(account: AccountId, token: TokenName, balance: Balance): void {
+      assert(this.hasBalanceFor(account, token, balance), ERR_INSUFFICIENT_BALANCE)
+    }
+  
+    exists(account: AccountId, token: TokenName): boolean {
+      return u128.gt(this.get(account, token), u128.Zero) as boolean;
+    }
+    
+    isZero(account: AccountId, token: TokenName): boolean {
+      return !this.exists(account, token);
+    }
+  
+    withdrawFromGuild(account: AccountId, token: TokenName, balance: Balance): void {
+      this.sub(GUILD, token, balance);
+      this.withdrawFromTotal(account, token, balance);
+    }
+  
+    withdrawFromEscrow(account: AccountId, token: TokenName, balance: Balance): void {
+      this.sub(ESCROW, token, balance);
+      this.withdrawFromTotal(account, token, balance);
+    }
+  
+    subtractFromEscrow(token: TokenName, balance: Balance): void {
+      this.sub(ESCROW, token, balance);
+      this.sub(TOTAL, token, balance);
+    }
+  
+    withdrawFromTotal(account: AccountId, token: TokenName, balance:u128): void {
+      this.sub(account, token, balance);
+      this.sub(TOTAL, token, balance);
+    }  
+  
+    addToEscrow(account: AccountId, token: TokenName, balance: Balance): void {
+      this.add(account, token, balance);
+      this.add(ESCROW, token, balance);
+      this.add(TOTAL, token, balance);
+    }
+  
+    addToGuild(token: TokenName, balance: Balance): void {
+      this.add(GUILD, token, balance);
+      this.add(TOTAL, token, balance);
+    }
+  }
 
 // Data Storage
 /** maps user to token to amount */
-export const userTokenBalances = new PersistentVector<userTokenBalanceInfo>('u') 
+export const tokenBalances = new TokenAccounting('um');
+/**donation Id to donations*/
+export const contributions = new AVLTree<u32, Donation>('d')
+/** proposal Id to proposal */
+export const proposals = new AVLTree<u32, Proposal>('p')
+/** Maps account name to proposal */
+export const memberProposals = new PersistentUnorderedMap<AccountId, Proposal>('mp')
+// Roles Structures
+/** roles assigned to member - member to roleName to role */
+export const memberRoles = new PersistentUnorderedMap<string, AVLTree<string, communityRole>>('mr') 
+/** roles defined by the community - map contractId to roleName to communityRole */
+export const roles = new PersistentUnorderedMap<string, AVLTree<string, communityRole>>('c')
+// Reputation Structures
+/** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
+export const reputationFactors = new PersistentUnorderedMap<string, AVLTree<string, reputationFactor>>('crf') 
+
 /** maps user to proposal to vote on that proposal */
 export const votesByMember = new PersistentVector<UserVote>('v') 
 /** maps token name to whether it is whitelisted or not */
@@ -15,27 +140,17 @@ export const proposedToKick = new PersistentMap<string, bool>('pk')
 /** maps account to its Member model */
 export const members = new PersistentMap<string, Member>('m') 
 /** maps account to delegate key */
-export const memberAddressByDelegatekey = new PersistentMap<string, string>('md') 
+export const memberAddressByDelegatekey = new PersistentMap<string, string>('md')
+
 /** array of proposals - use vector as provides index and length */
-export const proposals = new PersistentVector<Proposal>('p') 
+//export const proposals = new PersistentVector<Proposal>('p') 
 /**array of donations - use vector as provides index and length */
-export const contributions = new PersistentVector<Donation>('d') 
+//export const contributions = new PersistentMap<string, Donation>('d') 
 /** array of approvedtokens */
 export const approvedTokens = new PersistentVector<AccountId>('a') 
 /** map person delegating to delegation info */
 export const delegation = new PersistentMap<string, PersistentVector<delegationInfo>>('di') 
 
-// Roles Structures
-/** roles assigned to member */
-export const memberRoles = new PersistentMap<string, Array<communityRole>>('mr') 
-/** roles defined by the community */
-export const roles = new PersistentMap<string, Array<communityRole>>('c') 
-
-// Reputation Structures
-/** member reputation factors */
-export const memberReputationFactors = new PersistentMap<string, Array<reputationFactor>>('mrf') 
-/** reputation factors defined by the community */
-export const reputationFactors = new PersistentMap<string, Array<reputationFactor>>('crf') 
 
 @nearBindgen
 export class Votes {
@@ -50,12 +165,12 @@ export class UserVote {
     vote: string;
 }
 
-@nearBindgen
-export class userTokenBalanceInfo {
-    user: string;
-    token: string;
-    balance: u128;
-}
+// @nearBindgen
+// export class userTokenBalanceInfo {
+//     user: string;
+//     token: string;
+//     balance: u128;
+// }
 
 @nearBindgen
 export class delegationInfo {
@@ -160,18 +275,58 @@ export class Member {
     /** is member currently active in the community (true) or have they left (false) */
     public active: bool,
     /** community roles member currently has */
-    public roles: Array<communityRole>, 
+    public roles: AVLTree<string, communityRole>, 
     /** reputation factors that currently make up member's reputation score */
-    public reputation: Array<reputationFactor>,
+    public reputation: AVLTree<string, reputationFactor>,
     )
     {}
+
+    static getStatus(accountId: string): boolean {
+        // bool is 0 | 1, boolean is false | true
+        // contains returns bool so cast it to boolean to be able to return it.
+        return members.contains(accountId) as boolean;
+    }
+  
+    static get(accountId: string): Member {
+        const member = members.get(accountId)
+        assert(member!=null, ERR_NOT_A_MEMBER)
+        // Need type assertion to make ts happy and not have runtime check for null
+        return member as Member
+    }
+
+    static getDelegate(accountId: string): Member {
+        assert(memberAddressByDelegatekey.contains(accountId), ERR_NOT_DELEGATE)
+        return Member.get(accountId)
+    }
+
+    static getLoot(accountId: string): u128 {
+        if (!members.contains(accountId)){
+            return u128.Zero;
+        }
+        return this.get(accountId).loot;
+    }
+
+    static getShares(accountId: string): u128 {
+        if (!members.contains(accountId)){
+            return u128.Zero;
+        }
+        return this.get(accountId).shares;
+    }
+
+    hasShares(): boolean {
+        return isPositive(this.shares)
+    }
+
+    hasLoot(): boolean {
+        return isPositive(this.loot)
+    }
 }
 
 @nearBindgen
 export class Proposal {
   constructor(
     /** proposalId: frontend generated id to link record to proposal details */
-    public proposalId: i32,
+    public proposalId: u32,
     /** applicant: the applicant who wishes to become a member - this key will be used for withdrawals (doubles as guild kick target for gkick proposals) */
     public applicant: AccountId,
     /** proposer: the account that submitted the proposal (can be non-member) */

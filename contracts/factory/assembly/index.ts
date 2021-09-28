@@ -1,24 +1,24 @@
 import { AVLTree, ContractPromiseBatch, PersistentMap, Context, u128, env, storage, logging } from 'near-sdk-as'
 import { DaoModel } from './model';
 
-// const CODE = includeBytes('../../../build/release/catalystdao.wasm')
+const CODE = includeBytes('../../../build/release/catalystdao.wasm')
 
-const CODE_KEY = "CODE";
+//const CODE_KEY = "CODE";
 
-const OWNER_KEY = "OWNER";
+//const OWNER_KEY = "OWNER";
 
 
-export function init(ownerId: string): void {
-  assert(env.isValidAccountID(ownerId), "Invalid ownerId")
-  storage.setString(OWNER_KEY, ownerId)
-  logging.log(`${ownerId} now owner`)
-}
+// export function init(ownerId: string): void {
+//   assert(env.isValidAccountID(ownerId), "Invalid ownerId")
+//   storage.setString(OWNER_KEY, ownerId)
+//   logging.log(`${ownerId} now owner`)
+// }
 
-export function setBinary(): void {
-  assert(Context.sender == storage.getString(OWNER_KEY), "Only owner can set binary");
-  env.input(10);
-  env.storage_write(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), U64.MAX_VALUE, 10, 11);
-}
+// export function setBinary(): void {
+//   assert(Context.sender == storage.getString(OWNER_KEY), "Only owner can set binary");
+//   env.input(10);
+//   env.storage_write(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), U64.MAX_VALUE, 10, 11);
+// }
 
 let daos = new AVLTree<u32, DaoModel>('M')
 let daoIndex = new PersistentMap<string, u32>('I')
@@ -34,7 +34,7 @@ export function getDaoListLength(): u32 {
 
 export function getDaoByAccount(accountId: string): DaoModel {
   const index = getDaoIndex(accountId);
-  assert(index == -1, "No dao with this account")
+  assert(index != -1, "No dao with this account")
   return daos.get(index) as DaoModel;
 }
 
@@ -72,9 +72,9 @@ export function createDAO(
     .create_account()
     .transfer(Context.attachedDeposit)
   
-  env.storage_read(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), 10);
-  env.promise_batch_action_deploy_contract(promise.id, U64.MAX_VALUE, 10); 
-  //  .deploy_contract(Uint8Array.wrap(changetype<ArrayBuffer>(CODE)))
+  // env.storage_read(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), 10);
+  // env.promise_batch_action_deploy_contract(promise.id, U64.MAX_VALUE, 10); 
+    .deploy_contract(Uint8Array.wrap(changetype<ArrayBuffer>(CODE)))
   
   // next index (location to store the new DAO) should be greater than any key in the tree
   let nextIndex = daos.size == 0 ? 0 : daos.max() + 1;
