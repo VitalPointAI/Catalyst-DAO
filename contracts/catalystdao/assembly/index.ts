@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch, logging } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -13,17 +13,10 @@ import {
   GracePeriodLength, 
   ProposalDeposit, 
   DilutionBound,
-  VoteThreshold, 
-  ONE_NEAR,
-  ESCROW,
+  VoteThreshold,
   GUILD,
-  TOTAL,
-  MAX_VOTING_PERIOD_LENGTH,
-  MAX_GRACE_PERIOD_LENGTH,
-  MAX_DILUTION_BOUND,
-  MAX_NUMBER_OF_SHARES_AND_LOOT,
-  MAX_TOKEN_WHITELIST_COUNT,
-  MAX_TOKEN_GUILDBANK_COUNT
+  ESCROW,
+  TOTAL
 } from './dao-types'
 import { 
   members,
@@ -35,6 +28,7 @@ import {
   roles,
   reputationFactor,
   reputationFactors,
+  memberRepFactors,
   Member,
   Proposal,
   proposals,
@@ -50,7 +44,7 @@ import {
   memberDelegations,
   DelegationInfo,
   GenericObject,
-  tokenBalances
+  tokenBalances,
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
@@ -97,6 +91,19 @@ import {
 
 
 let depositToken: string
+
+// *****************
+// HARD-CODED LIMITS
+// These numbers are quite arbitrary; they are small enough to avoid overflows
+// when doing calculations with periods or shares, yet big enough to not limit 
+// reasonable use cases.
+// *****************
+export const MAX_VOTING_PERIOD_LENGTH: i32 = 10**8 // maximum length of voting period
+export const MAX_GRACE_PERIOD_LENGTH: i32 = 10**8 // maximum length of grace period
+export const MAX_DILUTION_BOUND: i32 = 10**8 // maximum dilution bound
+export const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of shares that can be minted
+export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
+export const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank
 
 // ********************
 // MODIFIERS
@@ -206,7 +213,7 @@ export function init(
   
   //set Summoner
   storage.set<string>('summoner', predecessor())
-
+  
   //set periodDuration
   storage.set<i32>('periodDuration', _periodDuration)
 
@@ -239,7 +246,7 @@ export function init(
 
   // transfer summoner contribution to the community fund
   let transferred = _sTRaw(_contribution, depositToken, _contractId)
-
+  
   if(transferred) {
     tokenBalances.addContribution(predecessor(), depositToken, _contribution)
 
@@ -247,20 +254,26 @@ export function init(
     // ROLES INITIALIZATION
     // *******************
     let defaultPermissions = new Array<string>()
-    defaultPermissions.push('read')
-    const memberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
 
-    let communitysRoles = new AVLTree<string, communityRole>('cr')
+    defaultPermissions.push('read')
+   
+    const memberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
+   
+    let communitysRoles = new AVLTree<string, communityRole>('dcr')
     communitysRoles.set('default', memberRole)
     roles.set(Context.contractName, communitysRoles) // start building the available community roles
-
+    
     // assign default member role
-    let availableRoles = roles.getSome(Context.contractName)
-    let defaultRole = availableRoles.getSome('default')
-    let thisMemberRoles = memberRoles.getSome(predecessor())
-    thisMemberRoles.set('default', defaultRole)
+    let thisMemberRoles = new AVLTree<string, communityRole>('dmr')
+    thisMemberRoles.set('default', memberRole)
     memberRoles.set(predecessor(), thisMemberRoles)
-
+    
+    // create empty reputation factors holder
+    const defRepFactor = new reputationFactor('', u128.Zero, Context.blockTimestamp, 0, 'default reputation factor', new Array<string>(), new Array<string>(), '' )
+    let repFactors = new AVLTree<string, reputationFactor>('drf')
+    repFactors.set('default', defRepFactor)
+    memberRepFactors.set(predecessor(), repFactors)
+ 
     // makes member object for summoner and puts it into the members storage
     members.set(predecessor(), 
       new Member(
@@ -276,16 +289,16 @@ export function init(
         Context.blockTimestamp, 
         true,
         thisMemberRoles,
-        new AVLTree<string, reputationFactor>('z')
+        repFactors
         ))
-
+      
     let currentMembers = storage.getSome<u128>('totalMembers')
     storage.set('totalMembers', u128.add(currentMembers, u128.from(1)))
 
     memberAddressByDelegatekey.set(predecessor(), predecessor())
 
     storage.set<u128>('totalShares', _shares)
-
+  
     //set init to done
     storage.set<string>("init", "done")
   }
@@ -821,7 +834,7 @@ function _proposalPassed(proposal: Proposal): bool {
   storage.set<u128>('totalLoot', newTotalLoot)
 
   // if the proposal tribute is the first tokens of its kind to make it into the guild bank, increment total guild bank tokens
-  if(u128.eq(tokenBalances.get(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(u128.mul(proposal.tributeOffered, ONE_NEAR), u128.Zero)) {
+  if(u128.eq(tokenBalances.get(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(proposal.tributeOffered, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens + 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
@@ -2112,7 +2125,7 @@ export function sponsorProposal(
   if(proposal.flags[7]) {
     //get guild token balances
     let balance = tokenBalances.get(GUILD, proposal.paymentToken)
-    assert(u128.le(u128.mul(proposal.paymentRequested, ONE_NEAR), balance), 'potential commitment must be less than what is in the community fund')
+    assert(u128.le(proposal.paymentRequested, balance), 'potential commitment must be less than what is in the community fund')
   }
 
   // collect proposal deposit from sponsor and store it in the contract until the proposal is processed

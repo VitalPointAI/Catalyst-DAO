@@ -1,6 +1,6 @@
-import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap } from 'near-sdk-as'
+import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap, logging } from 'near-sdk-as'
 import { ERR_INSUFFICIENT_BALANCE, ERR_NOT_A_MEMBER, ERR_NOT_DELEGATE } from './dao-error-messages'
-import { AccountId, ESCROW, GUILD, TOTAL } from './dao-types'
+import { AccountId, GUILD, ESCROW, TOTAL } from './dao-types'
 import { isPositive } from './utils'
 
 export type RoleName = string
@@ -14,18 +14,52 @@ export type Shares = i32
 export type TokenName = string
 export type Balance = u128
 
+// Data Storage
+/**donation Id to donations*/
+export const contributions = new AVLTree<DonationId, Donation>('d')
+/** proposal Id to proposal */
+export const proposals = new AVLTree<ProposalId, Proposal>('p')
+/** member to proposal to votes */
+export const userVotes = new PersistentUnorderedMap<ProposalId, Vote>('uv')
+export const votesByMember = new PersistentMap<AccountId, UserVoteMap>('v')
+/** maps account to its Member model */
+export const members = new PersistentMap<string, Member>('m') 
+/** Maps account name to memberProposal */
+export const memberProposals = new PersistentUnorderedMap<AccountId, Proposal>('mp')
+// Roles Structures
+/** roles assigned to member - member to roleName to role */
+export const memberRoles = new PersistentUnorderedMap<AccountId, AVLTree<RoleName, communityRole>>('mr') 
+/** roles defined by the community - map contractId to roleName to communityRole */
+export const roles = new PersistentUnorderedMap<ContractId, AVLTree<RoleName, communityRole>>('c')
+// Reputation Structures
+/** roles assigned to member - member to roleName to role */
+export const memberRepFactors = new PersistentUnorderedMap<AccountId, AVLTree<ReputationFactorName, reputationFactor>>('rf') 
+/** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
+export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, reputationFactor>>('crf') 
+/** map person delegating to delegation info */
+export const memberDelegations = new PersistentMap<AccountId, DelegateeMap>('md')
+/** maps token name to whether it is whitelisted or not */
+export const tokenWhiteList = new PersistentMap<string, bool>('tw') 
+/** maps token name to whether it has been proposed for white listing or not */
+export const proposedToWhiteList = new PersistentMap<string, bool>('pw') 
+/** maps user account to whether it has been proposed to kick or not */
+export const proposedToKick = new PersistentMap<string, bool>('pk') 
+/** maps account to delegate key */
+export const memberAddressByDelegatekey = new PersistentMap<string, string>('md')
+/** array of approvedtokens */
+export const approvedTokens = new PersistentVector<AccountId>('a')
 /** Map delegatee to shares */
 export type DelegateeMap = AVLTree<Delegatee, DelegationInfo>
 /** Maps proposalId to votes */
 export type UserVoteMap = PersistentUnorderedMap<ProposalId, Vote>
-
 /** Maps token name to balance */
 export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
+
 
 /**
  * Class to track the balances of users for various tokens.
  */
- class TokenAccounting {
+class TokenAccounting {
     /** Outer most map  */
    userTokenMap: PersistentMap<AccountId, TokenBalanceMap>;
    
@@ -35,7 +69,7 @@ export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
     }
   
     private getTokenMap(account: AccountId): TokenBalanceMap {
-      let tokenMap = this.userTokenMap.get(account);
+      let tokenMap = this.userTokenMap.get(this.prefix + account);
       if (tokenMap == null) {
         tokenMap = new PersistentUnorderedMap(this.prefix + account);
       }
@@ -123,40 +157,9 @@ export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
     }
   }
 
-// Data Storage
 /** maps user to token to amount */
 export const tokenBalances = new TokenAccounting('um');
-/**donation Id to donations*/
-export const contributions = new AVLTree<DonationId, Donation>('d')
-/** proposal Id to proposal */
-export const proposals = new AVLTree<ProposalId, Proposal>('p')
-/** member to proposal to votes */
-export const userVotes = new PersistentUnorderedMap<ProposalId, Vote>('uv')
-export const votesByMember = new PersistentMap<AccountId, UserVoteMap>('v')
-/** maps account to its Member model */
-export const members = new PersistentMap<string, Member>('m') 
-/** Maps account name to memberProposal */
-export const memberProposals = new PersistentUnorderedMap<AccountId, Proposal>('mp')
-// Roles Structures
-/** roles assigned to member - member to roleName to role */
-export const memberRoles = new PersistentUnorderedMap<AccountId, AVLTree<RoleName, communityRole>>('mr') 
-/** roles defined by the community - map contractId to roleName to communityRole */
-export const roles = new PersistentUnorderedMap<ContractId, AVLTree<RoleName, communityRole>>('c')
-// Reputation Structures
-/** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
-export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, reputationFactor>>('crf') 
-/** map person delegating to delegation info */
-export const memberDelegations = new PersistentMap<AccountId, DelegateeMap>('md')
-/** maps token name to whether it is whitelisted or not */
-export const tokenWhiteList = new PersistentMap<string, bool>('tw') 
-/** maps token name to whether it has been proposed for white listing or not */
-export const proposedToWhiteList = new PersistentMap<string, bool>('pw') 
-/** maps user account to whether it has been proposed to kick or not */
-export const proposedToKick = new PersistentMap<string, bool>('pk') 
-/** maps account to delegate key */
-export const memberAddressByDelegatekey = new PersistentMap<string, string>('md')
-/** array of approvedtokens */
-export const approvedTokens = new PersistentVector<AccountId>('a')
+
 
 @nearBindgen
 export class Votes {
