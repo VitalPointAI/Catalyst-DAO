@@ -1,6 +1,6 @@
   
 
-import { Context, storage, env, AVLTree, u128, ContractPromiseBatch, logging, PersistentVector } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -43,13 +43,14 @@ import {
   approvedTokens,
   votesByMember,
   Votes,
+  userVotes,
   TokenBalances,
   Donation,
   contributions,
-  delegation,
-  delegationInfo,
+  memberDelegations,
+  DelegationInfo,
   GenericObject,
-  tokenBalances,
+  tokenBalances
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
@@ -569,7 +570,7 @@ function _ragequit(memberAddress: AccountId, sharesToBurn: u128, lootToBurn: u12
  * otherwise they could potentially be taking away funds that were supposed to go to someone based on a community decision
  * @param highestIndexYesVote
 */
-function canRageQuit(highestIndexYesVote: i32): bool {
+function canRageQuit(highestIndexYesVote: u32): bool {
   assert(highestIndexYesVote < proposals.size, ERR_PROPOSAL_NO)
   return proposals.getSome(highestIndexYesVote).flags[1]
 }
@@ -1219,17 +1220,12 @@ export function getEscrowTokenBalances(): Array<TokenBalances> {
  * returns vote for a given memberaddress and proposal id - answers how someone voted on a certain proposal
 */
 export function getMemberProposalVote(memberAddress: AccountId, proposalId: u32): string {
-  let votesByMemberLength = votesByMember.length
-  let i = 0
-  while( i < votesByMemberLength ){
-    if(votesByMember[i].user == memberAddress && votesByMember[i].proposalId == proposalId){
-      if(votesByMember[i].vote != ''){
-        return votesByMember[i].vote
-      }
-    }
-    i++
-  }
-  return 'no vote yet'
+   let proposal = votesByMember.getSome(memberAddress)
+   let vote = proposal.getSome(proposalId)
+   if(vote != ''){
+     return vote
+   }
+   return 'no vote yet'
 }
 
 
@@ -1285,60 +1281,6 @@ export function getTotalLoot(): u128 {
 }
 
 
-// /**
-//  * returns the proposal index of a proposal - typically used to find it in the proposal vector
-//  * -1 indicates it is not found
-// */
-// export function getProposalIndex(proposalId: u32): i32 {
-//   let proposalsLength = proposals.length
-//   let i = 0
-//     while (i < proposalsLength) {
-//       if (proposals[i].proposalId == proposalId) {
-//         return i
-//       }
-//       i++
-//     }
-//   return -1
-// }
-
-
-// /**
-//  * returns the index for a given donation id
-// */
-// export function getDonationIndex(donationId: i32): i32 {
-//   let contributionsLength = contributions.length
-//   let i = 0
-//     while (i < contributionsLength) {
-//       if (contributions[i].donationId == donationId) {
-//         return i
-//       }
-//       i++
-//     }
-//   return -1
-// }
-
-
-
-
-// /**
-//  * returns index of a user's token balance 
-//  * -1 indicates not present
-// */
-// export function getUserTokenBalanceIndex(user: AccountId, token: AccountId): i32 {
-//   let userTokenBalancesLength = userTokenBalances.length
-//   let i = 0
-//   if (userTokenBalancesLength != 0) {
-//     while (i < userTokenBalancesLength) {
-//       if (userTokenBalances[i].user == user && userTokenBalances[i].token == token) {
-//         return i
-//       }
-//       i++
-//     }
-//   }
-//   return -1
-// }
-
-
 /**
  * returns current number of proposals 
 */
@@ -1381,33 +1323,12 @@ export function getProposal(proposalId: u32): Proposal {
 
 
 /**
- * returns index for a members delegation information
-*/
-export function getDelegationInfoIndex(member: AccountId, delegatee: AccountId): i32 {
-  let allDelegations = delegation.getSome(member)
-  let delegationsLength = allDelegations.length
-  let i = 0
-  while (i < delegationsLength){
-    if (allDelegations[i].delegatedTo == delegatee){
-      return i
-    }
-    i++
-  }
-  return -1
-}
-
-
-/**
  * returns delegation information for a given member
 */
-export function getDelegationInfo(member: AccountId, delegatee: AccountId): Array<Array<string>> {
-  let delegationIndex = getDelegationInfoIndex(member, delegatee)
-  let delegationInfo = new Array<Array<string>>()
-  let memberDelegationInfo = delegation.getSome(member)
-  delegationInfo.push([memberDelegationInfo[delegationIndex].delegatedTo, memberDelegationInfo[delegationIndex].shares.toString()])
-  return delegationInfo
+export function getDelegationInfo(member: AccountId, delegatee: AccountId): DelegationInfo {
+  let allMemberDelegations = memberDelegations.getSome(member)
+  return allMemberDelegations.getSome(delegatee)
 }
-
 
 
 /*****************
@@ -2158,8 +2079,9 @@ function _submitProposal(
     memberRoleConfiguration, // member specific role configuration
     referenceIds // references to other proposals
   ))
-  
-  votesByMember.push({user: predecessor(), proposalId: proposalId, vote: ''})
+
+  userVotes.set(proposalId, '')
+  votesByMember.set(predecessor(), userVotes)
   
   return true
 }
@@ -2280,14 +2202,16 @@ export function submitVote(proposalId: u32, vote: string): bool {
   let existingVote = getMemberProposalVote(predecessor(), proposalId)
   assert(existingVote == 'no vote yet', ERR_ALREADY_VOTED)
 
-  votesByMember.push({user: predecessor(), proposalId: proposalId, vote: vote})
+  userVotes.set(proposalId, vote)
+  votesByMember.set(predecessor(), userVotes)
+  //votesByMember.push({user: predecessor(), proposalId: proposalId, vote: vote})
 
   if(vote == 'yes') {
     let allVotingShares = u128.add(member.shares, member.receivedDelegations)
     let newYesVotes = u128.add(proposal.yesVotes, u128.sub(allVotingShares, member.delegatedShares))
 
     //set highest index (latest) yes vote - must be processed for member to ragequit
-    if(proposal.proposalId > member.highestIndexYesVote) {
+    if(proposal.proposalId > <u32>member.highestIndexYesVote) {
       member.highestIndexYesVote = proposal.proposalId
       members.set(memberAddress, member)
     }
@@ -2450,17 +2374,20 @@ function processGuildKickProposal(proposalId: u32): void {
     let member = members.getSome(proposal.applicant)
 
     // reverse any existing share delegations
-    let delegated = delegation.getSome(proposal.applicant)
-    let i: i32 = 0
-    while (i < delegated.length) {
-      let delegatedOwner = members.getSome(delegated[i].delegatedTo) // get original owner to give delegations back to
-      delegatedOwner.delegatedShares = u128.sub(delegatedOwner.delegatedShares, delegated[i].shares) // reduce delegated shares by amount that was delegated
-      delegated[i].shares = u128.Zero // zeroize the delegation
+    let allDelegations = memberDelegations.getSome(proposal.applicant)
+    let i: u32 = 0
+    let size = allDelegations.size
+    while (i < size) {
+      let dKey = allDelegations.min()
+      let delegation = allDelegations.getSome(dKey)
+      let delegatedOwner = members.getSome(delegation.delegatedTo) // get original owner to give delegations back to
+      delegatedOwner.delegatedShares = u128.sub(delegatedOwner.delegatedShares, delegation.shares) // reduce delegated shares by amount that was delegated
       members.set(delegatedOwner.delegateKey, delegatedOwner) // update delegated member
+      allDelegations.delete(dKey)
       i++
     }
 
-    delegation.set(proposal.applicant, delegated) // update kicked member's delegation tracking
+    memberDelegations.set(proposal.applicant, allDelegations) // update kicked member's delegation tracking
 
     let updateMember = new Member(
       member.delegateKey,
@@ -2555,18 +2482,23 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
     storage.set<u128>('totalLoot', newTotalLoot)
 
     // remove share delegations
-    if(delegation.contains(predecessor())){
-      let delegations = delegation.getSome(predecessor())
-      let i: i32 = 0
-      while (i < delegations.length){
-          // Remove received delegations from those this member delegated to
-          let delegatedMember = members.getSome(delegations[i].delegatedTo)
-          delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, delegations[i].shares)
-          members.set(delegations[i].delegatedTo, delegatedMember)
-          i++
+    if(memberDelegations.contains(predecessor())){
+       // reverse any existing share delegations
+      let allDelegations = memberDelegations.getSome(predecessor())
+      let i: u32 = 0
+      let size = allDelegations.size
+      while (i < size) {
+        let dKey = allDelegations.min()
+        let delegation = allDelegations.getSome(dKey)
+        let delegatedMember = members.getSome(delegation.delegatedTo) // get original owner to give delegations back to
+        delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, delegation.shares) // reduce delegated shares by amount that was delegated
+        members.set(delegation.delegatedTo, delegatedMember) // update delegated member
+        allDelegations.delete(dKey)
+        i++
       }
-      // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info
-      delegation.delete(predecessor())
+    
+    // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info
+    memberDelegations.delete(predecessor())
     }
       
     // delete member
@@ -2599,11 +2531,11 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
   assert(u128.ge(member.shares, quantity), 'member does not have enough shares to delegate')
 
   //obtain predecessor()'s map of vectors of existing delegations or start a new one
-  if(delegation.contains(predecessor())){
-    let existingDelegations = delegation.getSome(predecessor())
-    let newDelegation = new delegationInfo(delegateTo, quantity)
-    existingDelegations.push(newDelegation)
-    delegation.set(predecessor(), existingDelegations)
+  if(memberDelegations.contains(predecessor())){
+    let existingDelegations = memberDelegations.getSome(predecessor())
+    let newDelegation = new DelegationInfo(delegateTo, quantity)
+    existingDelegations.set(delegateTo, newDelegation)
+    memberDelegations.set(predecessor(), existingDelegations)
 
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
@@ -2615,10 +2547,10 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
     members.set(delegateTo, delegate)
     
   } else {
-    let existingDelegations = new PersistentVector<delegationInfo>('ed')
-    let newDelegation = new delegationInfo(delegateTo, quantity)
-    existingDelegations.push(newDelegation)
-    delegation.set(predecessor(), existingDelegations)
+    let existingDelegations = new AVLTree<string, DelegationInfo>('ed')
+    let newDelegation = new DelegationInfo(delegateTo, quantity)
+    existingDelegations.set(delegateTo, newDelegation)
+    memberDelegations.set(predecessor(), existingDelegations)
 
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
@@ -2645,26 +2577,23 @@ export function undelegate(delegateFrom: string, quantity: u128): boolean {
   assert(u128.gt(quantity, u128.Zero), 'quantity must be greater than zero')
 
   // get user's current delegations
-  let delegations = delegation.getSome(predecessor())
-  let i: i32 = 0
-  while (i < delegations.length){
-    if(delegations[i].delegatedTo == delegateFrom && u128.gt(delegations[i].shares, u128.Zero)){
-      assert(u128.le(quantity, delegations[i].shares), 'not enough shares delegated, lower quantity')
-      let member = members.getSome(predecessor())
+  let delegations = memberDelegations.getSome(predecessor())
+  let delegatedTo = delegations.getSome(delegateFrom)
+  assert(u128.gt(delegatedTo.shares, u128.Zero), 'member has no delegations')
+  assert(u128.le(quantity, delegatedTo.shares), 'not enough shares delegated, lower quantity')
+  let member = members.getSome(predecessor())
      
-      member.delegatedShares = u128.sub(member.delegatedShares, quantity)
-      members.set(predecessor(), member)
+  member.delegatedShares = u128.sub(member.delegatedShares, quantity)
+  members.set(predecessor(), member)
 
-      delegations[i].shares = u128.sub(delegations[i].shares, quantity)
-      delegation.set(predecessor(), delegations)
+  delegatedTo.shares = u128.sub(delegatedTo.shares, quantity)
+  delegations.set(delegatedTo.delegatedTo, delegatedTo)
+  memberDelegations.set(predecessor(), delegations)
 
-      let delegatedMember = members.getSome(delegateFrom)
-      delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, quantity)
-      members.set(delegateFrom, delegatedMember)
-      break
-    }
-    i++
-  }
+  let delegatedMember = members.getSome(delegateFrom)
+  delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, quantity)
+  members.set(delegateFrom, delegatedMember)
+  
   return true
 }
 

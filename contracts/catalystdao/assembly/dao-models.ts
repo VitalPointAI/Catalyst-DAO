@@ -3,9 +3,21 @@ import { ERR_INSUFFICIENT_BALANCE, ERR_NOT_A_MEMBER, ERR_NOT_DELEGATE } from './
 import { AccountId, ESCROW, GUILD, TOTAL } from './dao-types'
 import { isPositive } from './utils'
 
-
+export type RoleName = string
+export type ContractId = string
+export type ReputationFactorName = string
+export type DonationId = u32
+export type ProposalId = u32
+export type Vote = string
+export type Delegatee = string
+export type Shares = i32
 export type TokenName = string
 export type Balance = u128
+
+/** Map delegatee to shares */
+export type DelegateeMap = AVLTree<Delegatee, DelegationInfo>
+/** Maps proposalId to votes */
+export type UserVoteMap = PersistentUnorderedMap<ProposalId, Vote>
 
 /** Maps token name to balance */
 export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
@@ -115,42 +127,36 @@ export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
 /** maps user to token to amount */
 export const tokenBalances = new TokenAccounting('um');
 /**donation Id to donations*/
-export const contributions = new AVLTree<u32, Donation>('d')
+export const contributions = new AVLTree<DonationId, Donation>('d')
 /** proposal Id to proposal */
-export const proposals = new AVLTree<u32, Proposal>('p')
-/** Maps account name to proposal */
+export const proposals = new AVLTree<ProposalId, Proposal>('p')
+/** member to proposal to votes */
+export const userVotes = new PersistentUnorderedMap<ProposalId, Vote>('uv')
+export const votesByMember = new PersistentMap<AccountId, UserVoteMap>('v')
+/** maps account to its Member model */
+export const members = new PersistentMap<string, Member>('m') 
+/** Maps account name to memberProposal */
 export const memberProposals = new PersistentUnorderedMap<AccountId, Proposal>('mp')
 // Roles Structures
 /** roles assigned to member - member to roleName to role */
-export const memberRoles = new PersistentUnorderedMap<string, AVLTree<string, communityRole>>('mr') 
+export const memberRoles = new PersistentUnorderedMap<AccountId, AVLTree<RoleName, communityRole>>('mr') 
 /** roles defined by the community - map contractId to roleName to communityRole */
-export const roles = new PersistentUnorderedMap<string, AVLTree<string, communityRole>>('c')
+export const roles = new PersistentUnorderedMap<ContractId, AVLTree<RoleName, communityRole>>('c')
 // Reputation Structures
 /** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
-export const reputationFactors = new PersistentUnorderedMap<string, AVLTree<string, reputationFactor>>('crf') 
-
-/** maps user to proposal to vote on that proposal */
-export const votesByMember = new PersistentVector<UserVote>('v') 
+export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, reputationFactor>>('crf') 
+/** map person delegating to delegation info */
+export const memberDelegations = new PersistentMap<AccountId, DelegateeMap>('md')
 /** maps token name to whether it is whitelisted or not */
 export const tokenWhiteList = new PersistentMap<string, bool>('tw') 
 /** maps token name to whether it has been proposed for white listing or not */
 export const proposedToWhiteList = new PersistentMap<string, bool>('pw') 
 /** maps user account to whether it has been proposed to kick or not */
 export const proposedToKick = new PersistentMap<string, bool>('pk') 
-/** maps account to its Member model */
-export const members = new PersistentMap<string, Member>('m') 
 /** maps account to delegate key */
 export const memberAddressByDelegatekey = new PersistentMap<string, string>('md')
-
-/** array of proposals - use vector as provides index and length */
-//export const proposals = new PersistentVector<Proposal>('p') 
-/**array of donations - use vector as provides index and length */
-//export const contributions = new PersistentMap<string, Donation>('d') 
 /** array of approvedtokens */
-export const approvedTokens = new PersistentVector<AccountId>('a') 
-/** map person delegating to delegation info */
-export const delegation = new PersistentMap<string, PersistentVector<delegationInfo>>('di') 
-
+export const approvedTokens = new PersistentVector<AccountId>('a')
 
 @nearBindgen
 export class Votes {
@@ -160,20 +166,14 @@ export class Votes {
 
 @nearBindgen
 export class UserVote {
-    user: string;
-    proposalId: i32;
-    vote: string;
+    constructor(
+        public proposalId: i32,
+        public vote: string
+    ){}
 }
 
-// @nearBindgen
-// export class userTokenBalanceInfo {
-//     user: string;
-//     token: string;
-//     balance: u128;
-// }
-
 @nearBindgen
-export class delegationInfo {
+export class DelegationInfo {
     constructor(
         public delegatedTo: string,
         public shares: u128
@@ -222,7 +222,6 @@ export class communityRole {
     /** add, update, delete, nil - actions used when proposal passes */
     public action: string,
   ){}
-
 }
 
 @nearBindgen
@@ -244,7 +243,6 @@ export class reputationFactor {
     public repFactorActions: Array<string>,
     /** add, update, delete, nil - actions used when proposal passes */
     public action: string,
-
     )
     {}
 }

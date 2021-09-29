@@ -1,4 +1,4 @@
-import { u128 } from 'near-sdk-as'
+import { u128, PersistentVector } from 'near-sdk-as'
 
 export type AccountId = string
 
@@ -33,7 +33,7 @@ export const TOTAL: AccountId = 'total.vitalpointai.testnet'
 // reasonable use cases.
 // *****************
 export const MAX_VOTING_PERIOD_LENGTH: i32 = 10**8 // maximum length of voting period
-export const MAX_GRACE_PERIOD_LENGTH:i32 = 10**8 // maximum length of grace period
+export const MAX_GRACE_PERIOD_LENGTH: i32 = 10**8 // maximum length of grace period
 export const MAX_DILUTION_BOUND: i32 = 10**8 // maximum dilution bound
 export const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of shares that can be minted
 export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
