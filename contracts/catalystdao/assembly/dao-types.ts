@@ -1,4 +1,4 @@
-import { u128 } from 'near-sdk-as'
+import { u128, Context } from 'near-sdk-as'
 
 export type AccountId = string
 
@@ -20,7 +20,7 @@ export type VoteThreshold = i32
 // *******************
 // INTERNAL ACCOUNTING
 // *******************
-export const GUILD: AccountId = 'fund.vitalpointai.testnet'
-export const ESCROW: AccountId = 'escrow.vitalpointai.testnet'
-export const TOTAL: AccountId = 'total.vitalpointai.testnet'
+export const GUILD: AccountId = 'fund.' + Context.contractName
+export const ESCROW: AccountId = 'escrow.' + Context.contractName
+export const TOTAL: AccountId = 'total.'+ Context.contractName
 

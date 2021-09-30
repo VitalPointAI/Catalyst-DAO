@@ -53,118 +53,122 @@ export type DelegateeMap = AVLTree<Delegatee, DelegationInfo>
 /** Maps proposalId to votes */
 export type UserVoteMap = PersistentUnorderedMap<ProposalId, Vote>
 /** Maps token name to balance */
-export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
+//export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
+export const tokenBalances = new PersistentUnorderedMap<AccountId, PersistentMap<TokenName, Balance>>('tob')
 
 
-/**
- * Class to track the balances of users for various tokens.
- */
-class TokenAccounting {
-    /** Outer most map  */
-   userTokenMap: PersistentMap<AccountId, TokenBalanceMap>;
-   
-    constructor(private prefix: string){
-      // Don't need the generic type since they are declared above.
-      this.userTokenMap = new PersistentMap(prefix);
+@nearBindgen
+export class TokenAccounting {
+    constructor(
+        
+    ) {}
+
+    private getTokenMap(account: AccountId, token: TokenName, balance: Balance = u128.Zero): PersistentMap<string, u128> {
+        let exists = tokenBalances.contains(account)
+        if (exists) {
+            return tokenBalances.getSome(account)
+            
+        } else {
+            let newTokenBalanceMap = new PersistentMap<string, u128>('tb' + account)
+            newTokenBalanceMap.set(token, balance)
+            return newTokenBalanceMap
+        }
     }
-  
-    private getTokenMap(account: AccountId): TokenBalanceMap {
-      let tokenMap = this.userTokenMap.get(this.prefix + account);
-      if (tokenMap == null) {
-        tokenMap = new PersistentUnorderedMap(this.prefix + account);
-      }
-      return tokenMap;
-    }
-  
+
     /** Sets a users balance for a token and creates inner map if not present. */
     add(account: AccountId, token: TokenName, balance: Balance = u128.Zero): void {
-      const tokenMap = this.getTokenMap(account);
-      tokenMap.set(token, u128.add(tokenMap.get(token, u128.Zero) as u128, balance));
-      this.userTokenMap.set(account, tokenMap);
+    let tokenMap = this.getTokenMap(account, token, balance);
+    tokenMap.set(token, u128.add(tokenMap.get(token, u128.Zero) as u128, balance));
+    tokenBalances.set(account, tokenMap);
     }
-  
+
     sub(account: AccountId, token: TokenName, balance: Balance): void {
-      const tokenMap = this.getTokenMap(account);
-      tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
-      this.userTokenMap.set(account, tokenMap);
+    let tokenMap = this.getTokenMap(account, token, balance);
+    tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
+    tokenBalances.set(account, tokenMap);
     }
-  
+
     get(account: AccountId, token: TokenName): u128 {
-      let tokenMap = this.userTokenMap.get(account);
-      if (tokenMap == null) return u128.Zero;
-      // Need the as below to tell the IDE that it won't return null
-      return tokenMap.get(token, u128.Zero) as u128;
+    let tokenMap = tokenBalances.getSome(account);
+    if (tokenMap == null) return u128.Zero;
+    // Need the as below to tell the IDE that it won't return null
+    return tokenMap.get(token, u128.Zero) as u128;
     }
-  
+
     addContribution(account: AccountId, token: TokenName, balance: Balance): void {
-      this.add(account, token, balance);
-      this.add(GUILD, token, balance);
-      this.add(TOTAL, token, balance);
+    this.add(account, token, balance);
+    this.add(GUILD, token, balance);
+    this.add(TOTAL, token, balance);
     }
-  
+
     transfer(from: AccountId, to: AccountId, token: string, balance: Balance): void {
-      this.assertBalance(from, token, balance);
-      this.sub(from, token, balance);
-      this.add(to, token, balance);
+    this.assertBalance(from, token, balance);
+    this.sub(from, token, balance);
+    this.add(to, token, balance);
     }
-  
+
     hasBalanceFor(account: AccountId, token: TokenName, balance: Balance): boolean {
-      const fromBalance = this.get(account, token);
-      return u128.gt(fromBalance, balance) as boolean;
+    const fromBalance = this.get(account, token);
+    return u128.gt(fromBalance, balance) as boolean;
     }
-  
+
     assertBalance(account: AccountId, token: TokenName, balance: Balance): void {
-      assert(this.hasBalanceFor(account, token, balance), ERR_INSUFFICIENT_BALANCE)
+    assert(this.hasBalanceFor(account, token, balance), ERR_INSUFFICIENT_BALANCE)
     }
-  
+
     exists(account: AccountId, token: TokenName): boolean {
-      return u128.gt(this.get(account, token), u128.Zero) as boolean;
+    return u128.gt(this.get(account, token), u128.Zero) as boolean;
     }
-    
+
     isZero(account: AccountId, token: TokenName): boolean {
-      return !this.exists(account, token);
+    return !this.exists(account, token);
     }
-  
+
     withdrawFromGuild(account: AccountId, token: TokenName, balance: Balance): void {
-      this.sub(GUILD, token, balance);
-      this.withdrawFromTotal(account, token, balance);
+    this.sub(GUILD, token, balance);
+    this.withdrawFromTotal(account, token, balance);
     }
-  
+
     withdrawFromEscrow(account: AccountId, token: TokenName, balance: Balance): void {
-      this.sub(ESCROW, token, balance);
-      this.withdrawFromTotal(account, token, balance);
+    this.sub(ESCROW, token, balance);
+    this.withdrawFromTotal(account, token, balance);
     }
-  
+
     subtractFromEscrow(token: TokenName, balance: Balance): void {
-      this.sub(ESCROW, token, balance);
-      this.sub(TOTAL, token, balance);
+    this.sub(ESCROW, token, balance);
+    this.sub(TOTAL, token, balance);
     }
-  
+
     withdrawFromTotal(account: AccountId, token: TokenName, balance:u128): void {
-      this.sub(account, token, balance);
-      this.sub(TOTAL, token, balance);
+    this.sub(account, token, balance);
+    this.sub(TOTAL, token, balance);
     }  
-  
+
     addToEscrow(account: AccountId, token: TokenName, balance: Balance): void {
-      this.add(account, token, balance);
-      this.add(ESCROW, token, balance);
-      this.add(TOTAL, token, balance);
+    this.add(account, token, balance);
+    this.add(ESCROW, token, balance);
+    this.add(TOTAL, token, balance);
     }
-  
+
     addToGuild(token: TokenName, balance: Balance): void {
-      this.add(GUILD, token, balance);
-      this.add(TOTAL, token, balance);
+    this.add(GUILD, token, balance);
+    this.add(TOTAL, token, balance);
     }
-  }
-
-/** maps user to token to amount */
-export const tokenBalances = new TokenAccounting('um');
-
+}
 
 @nearBindgen
 export class Votes {
     yes: u128;
     no: u128;
+}
+
+@nearBindgen
+export class TokenBalanceMap {
+    constructor(
+        public token: string,
+        public balance: u128
+    )
+    {}
 }
 
 @nearBindgen

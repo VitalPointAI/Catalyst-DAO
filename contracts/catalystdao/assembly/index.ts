@@ -44,7 +44,7 @@ import {
   memberDelegations,
   DelegationInfo,
   GenericObject,
-  tokenBalances,
+  TokenAccounting
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
@@ -91,6 +91,7 @@ import {
 
 
 let depositToken: string
+const TokenClass = new TokenAccounting()
 
 // *****************
 // HARD-CODED LIMITS
@@ -104,6 +105,7 @@ export const MAX_DILUTION_BOUND: i32 = 10**8 // maximum dilution bound
 export const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of shares that can be minted
 export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
 export const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank
+
 
 // ********************
 // MODIFIERS
@@ -236,9 +238,9 @@ export function init(
   storage.set<u64>('summoningTime', Context.blockTimestamp)
 
   //set initial Guild/Escrow/Total address balances
-  tokenBalances.add(GUILD, depositToken)
-  tokenBalances.add(ESCROW, depositToken)
-  tokenBalances.add(TOTAL, depositToken)
+  TokenClass.add(GUILD, depositToken)
+  TokenClass.add(ESCROW, depositToken)
+  TokenClass.add(TOTAL, depositToken)
   storage.set<i32>('totalGuildBankTokens', 0)
   storage.set<u128>('totalShares', u128.Zero)
   storage.set<u128>('totalLoot', u128.Zero)
@@ -248,7 +250,7 @@ export function init(
   let transferred = _sTRaw(_contribution, depositToken, _contractId)
   
   if(transferred) {
-    tokenBalances.addContribution(predecessor(), depositToken, _contribution)
+    TokenClass.addContribution(predecessor(), depositToken, _contribution)
 
     // *******************
     // ROLES INITIALIZATION
@@ -400,7 +402,7 @@ return Context.blockTimestamp
 */
 function _internalTransfer(from: AccountId, to: AccountId, token: AccountId, amount: u128): void {
   assertValidId(from)
-  tokenBalances.transfer(from, to, token, amount)
+  TokenClass.transfer(from, to, token, amount)
 }
 
 
@@ -480,13 +482,13 @@ function _didPass(proposal: Proposal): bool {
   }
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
-  if(u128.gt(proposal.paymentRequested, u128.from(tokenBalances.get(GUILD, proposal.paymentToken)))) {
+  if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
     didPass = false
   }
   
   //Make the proposal fail if it would result in too many tokens with non-zero balance in guild bank
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
-  if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(tokenBalances.get(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
+  if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
     didPass = false
   }
   
@@ -563,14 +565,14 @@ function _ragequit(memberAddress: AccountId, sharesToBurn: u128, lootToBurn: u12
   let approvedTokensLength = approvedTokens.length
   let i: i32 = 0
   while (i < approvedTokensLength) {
-    let amountToRagequit = _fairShare(tokenBalances.get(GUILD, approvedTokens[i]), sharesAndLootToBurn, initialTotalSharesAndLoot)
+    let amountToRagequit = _fairShare(TokenClass.get(GUILD, approvedTokens[i]), sharesAndLootToBurn, initialTotalSharesAndLoot)
     if (u128.gt(amountToRagequit, u128.Zero)) {
 
       // transfer to user
       let transferred = _sTRaw(amountToRagequit, approvedTokens[i], memberAddress)
 
       if(transferred) {
-        tokenBalances.withdrawFromGuild(memberAddress, approvedTokens[i], amountToRagequit)
+        TokenClass.withdrawFromGuild(memberAddress, approvedTokens[i], amountToRagequit)
       }
 
     }
@@ -607,7 +609,7 @@ export function withdrawBalance(token: AccountId, amount: u128, to: AccountId): 
 function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
   assertValidId(to)
   assert(to == predecessor(), 'not account that is withdrawing')
-  tokenBalances.assertBalance(to, token, amount)
+  TokenClass.assertBalance(to, token, amount)
 
   let fairShare = getCurrentShare(to)
   assert(u128.le(amount, fairShare), 'asking to withdraw more than fair share of the fund')
@@ -615,7 +617,7 @@ function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
   let transferred = _sTRaw(amount, token, to)
 
   if(transferred) {
-    tokenBalances.withdrawFromTotal(to, token, amount)
+    TokenClass.withdrawFromTotal(to, token, amount)
     return true
   }
   return false
@@ -650,7 +652,7 @@ export function cancelProposal(proposalId: u32, tribute: u128, loot: u128): Prop
     let secondTransfer = _sTRaw(totalSharesLoot, proposal.tributeToken, proposal.proposer)
 
     if(secondTransfer) {
-      tokenBalances.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesLoot)
+      TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesLoot)
     }
     return proposal
   }
@@ -683,7 +685,7 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
   let transferred = _sTRaw(amount, token, contractId)
 
   if(transferred) {
-    tokenBalances.addToGuild(token, amount)
+    TokenClass.addToGuild(token, amount)
 
     return true
   } else {
@@ -834,7 +836,7 @@ function _proposalPassed(proposal: Proposal): bool {
   storage.set<u128>('totalLoot', newTotalLoot)
 
   // if the proposal tribute is the first tokens of its kind to make it into the guild bank, increment total guild bank tokens
-  if(u128.eq(tokenBalances.get(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(proposal.tributeOffered, u128.Zero)) {
+  if(u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(proposal.tributeOffered, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens + 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
@@ -931,7 +933,7 @@ function _proposalPassed(proposal: Proposal): bool {
       let transferred = _sTRaw(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
 
       if(transferred) {
-        tokenBalances.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
+        TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
       }
     }
   }
@@ -940,7 +942,7 @@ function _proposalPassed(proposal: Proposal): bool {
   _internalTransfer(ESCROW, GUILD, proposal.tributeToken, proposal.tributeOffered)
 
   // if the proposal spends 100% of guild bank balance for a token, decrement total guild bank tokens
-  if(u128.eq(tokenBalances.get(GUILD, proposal.paymentToken), u128.Zero) && u128.gt(proposal.paymentRequested, u128.Zero)) {
+  if(u128.eq(TokenClass.get(GUILD, proposal.paymentToken), u128.Zero) && u128.gt(proposal.paymentRequested, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens - 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
@@ -964,7 +966,7 @@ function _proposalFailed(proposal: Proposal): bool {
     let withdrawn = _sTRaw(totalSharesAndLoot, proposal.tributeToken, proposal.proposer)
 
     if(withdrawn) {
-      tokenBalances.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesAndLoot)
+      TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesAndLoot)
     
     return true
     }
@@ -1205,7 +1207,7 @@ export function getGuildTokenBalances(): Array<TokenBalances> {
   let approvedTokensLength = approvedTokens.length
   let i = 0
   while (i < approvedTokensLength) {
-    let balance = tokenBalances.get(GUILD, approvedTokens[i])
+    let balance = TokenClass.get(GUILD, approvedTokens[i])
     balances.push({token: approvedTokens[i], balance: balance})
     i++
   }
@@ -1221,7 +1223,7 @@ export function getEscrowTokenBalances(): Array<TokenBalances> {
   let approvedTokensLength = approvedTokens.length
   let i = 0
   while (i < approvedTokensLength) {
-    let balance = tokenBalances.get(ESCROW, approvedTokens[i])
+    let balance = TokenClass.get(ESCROW, approvedTokens[i])
     balances.push({token: approvedTokens[i], balance: balance})
     i++
   }
@@ -1251,7 +1253,7 @@ export function getCurrentShare(member: AccountId): u128 {
   let totalLoot = storage.getSome<u128>('totalLoot')
   let depositToken = storage.getSome<string>('depositToken')
   let totalSharesAndLoot = u128.add(totalShares, totalLoot)
-  let fairShare = _fairShare(tokenBalances.get(GUILD, depositToken), u128.add(thisMember.shares, thisMember.loot), totalSharesAndLoot)
+  let fairShare = _fairShare(TokenClass.get(GUILD, depositToken), u128.add(thisMember.shares, thisMember.loot), totalSharesAndLoot)
   return fairShare
 }
 
@@ -1377,7 +1379,7 @@ export function submitMemberProposal (
     assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
   }
   
-  if(u128.gt(tributeOffered, u128.Zero) && u128.eq(tokenBalances.get(GUILD, tributeToken), u128.Zero)) {
+  if(u128.gt(tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, tributeToken), u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
   }
@@ -1390,7 +1392,7 @@ export function submitMemberProposal (
   let transferred = _sTRaw(totalAmount, tributeToken, contractId)
 
   if(transferred) {
-    tokenBalances.addToEscrow(predecessor(), tributeToken, totalAmount)
+    TokenClass.addToEscrow(predecessor(), tributeToken, totalAmount)
 
 
     let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
@@ -1502,7 +1504,7 @@ if(members.contains(applicant)) {
   assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
 }
 
-if(u128.gt(tributeOffered, u128.Zero) && u128.eq(tokenBalances.get(GUILD, tributeToken), u128.Zero)) {
+if(u128.gt(tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, tributeToken), u128.Zero)) {
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
 }
@@ -1515,7 +1517,7 @@ assert(u128.eq(Context.attachedDeposit, totalContribution), 'attached deposit no
 let transferred = _sTRaw(totalContribution, tributeToken, contractId)
 
 if(transferred) {
-  tokenBalances.addToEscrow(applicant, tributeToken, totalContribution)
+  TokenClass.addToEscrow(applicant, tributeToken, tributeOffered)
 
   let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
   flags[9] = true // tribute proposal
@@ -2124,7 +2126,7 @@ export function sponsorProposal(
   // i.e., is less than what is in the community fund
   if(proposal.flags[7]) {
     //get guild token balances
-    let balance = tokenBalances.get(GUILD, proposal.paymentToken)
+    let balance = TokenClass.get(GUILD, proposal.paymentToken)
     assert(u128.le(proposal.paymentRequested, balance), 'potential commitment must be less than what is in the community fund')
   }
 
@@ -2141,7 +2143,7 @@ export function sponsorProposal(
       assert(members.getSome(proposal.applicant).jailed == 0, 'member jailed')
     }
 
-    if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(tokenBalances.get(GUILD, proposal.tributeToken), u128.Zero)) {
+    if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero)) {
       let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
       assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, 'guild bank full')
     }
@@ -2475,7 +2477,7 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
   let transfer = _sTRaw(remaining, depositToken, appOwner)
 
   if(withdrawn && transfer) {
-    tokenBalances.withdrawFromGuild(predecessor(), depositToken, share)
+    TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
 
     // check for last member and make donation if applicable
     let numberOfMembers = getTotalMembers()
