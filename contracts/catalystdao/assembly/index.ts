@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch, logging } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -35,19 +35,21 @@ import {
   proposedToWhiteList,
   proposedToKick,
   approvedTokens,
-  votesByMember,
   Votes,
-  userVotes,
   TokenBalances,
   Donation,
   contributions,
   memberDelegations,
   DelegationInfo,
   GenericObject,
-  TokenAccounting
+  TokenAccounting,
+  accountVotes,
+  affiliations,
+  affiliationProposals
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
+  ERR_INSUFFICIENT_BALANCE,
   ERR_MUSTBE_GREATERTHAN_ZERO,
   ERR_MUSTBELESSTHAN_MAX_VOTING_PERIOD_LENGTH,
   ERR_MUSTBELESSTHAN_MAX_GRACE_PERIOD_LENGTH,
@@ -256,25 +258,27 @@ export function init(
     // ROLES INITIALIZATION
     // *******************
     let defaultPermissions = new Array<string>()
-
     defaultPermissions.push('read')
    
-    const memberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
+    const defaultMemberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
    
     let communitysRoles = new AVLTree<string, communityRole>('dcr')
-    communitysRoles.set('default', memberRole)
-    roles.set(Context.contractName, communitysRoles) // start building the available community roles
+    communitysRoles.set('default', defaultMemberRole)
+    roles.set(Context.contractName, communitysRoles)
     
-    // assign default member role
-    let thisMemberRoles = new AVLTree<string, communityRole>('dmr')
-    thisMemberRoles.set('default', memberRole)
-    memberRoles.set(predecessor(), thisMemberRoles)
+    _initializeDefaultMemberRoles(predecessor())
     
     // create empty reputation factors holder
     const defRepFactor = new reputationFactor('', u128.Zero, Context.blockTimestamp, 0, 'default reputation factor', new Array<string>(), new Array<string>(), '' )
-    let repFactors = new AVLTree<string, reputationFactor>('drf')
-    repFactors.set('default', defRepFactor)
-    memberRepFactors.set(predecessor(), repFactors)
+    
+    let communityRepFactors = new AVLTree<string, reputationFactor>('crfs')
+    communityRepFactors.set('default', defRepFactor)
+    reputationFactors.set(Context.contractName, communityRepFactors)
+
+    _initializeDefaultReputationFactors(predecessor())
+
+    let startRoles = memberRoles.getSome(predecessor())
+    let startRepFactors = memberRepFactors.getSome(predecessor())
  
     // makes member object for summoner and puts it into the members storage
     members.set(predecessor(), 
@@ -290,9 +294,14 @@ export function init(
         Context.blockTimestamp, 
         Context.blockTimestamp, 
         true,
-        thisMemberRoles,
-        repFactors
+        startRoles.values(startRoles.min(), startRoles.max(), true),
+        startRepFactors.values(startRepFactors.min(), startRepFactors.max(), true)
         ))
+    
+    // initiate vote tracking
+    let newVote = new PersistentMap<u32, string>('uv' + predecessor())
+    newVote.set(0, '')
+    accountVotes.set(predecessor(), newVote)
       
     let currentMembers = storage.getSome<u128>('totalMembers')
     storage.set('totalMembers', u128.add(currentMembers, u128.from(1)))
@@ -392,6 +401,34 @@ return Context.blockTimestamp
 /*********************/ 
 /* UTILITY FUNCTIONS */
 /*********************/
+/**
+ * Internal function to initalize and assign default role to new member
+ * @param applicant
+*/
+function _initializeDefaultMemberRoles(applicant: AccountId): void {
+  let currentRoles = roles.getSome(Context.contractName)
+  let defaultRole = currentRoles.getSome('default')
+
+  // assign default member role
+  let thisMemberRoles = new AVLTree<string, communityRole>('dmr' + applicant)
+  thisMemberRoles.set('default', defaultRole)
+  memberRoles.set(predecessor(), thisMemberRoles)
+}
+
+/**
+ * 
+ * @param applicant
+ */
+function _initializeDefaultReputationFactors(applicant: AccountId): void {
+  let currentRepFactors = reputationFactors.getSome(Context.contractName)
+  let defaultRepFactor = currentRepFactors.getSome('default')
+
+  //assign default reputation factor
+  let thisMemberRepFactors = new AVLTree<string, reputationFactor>('rf' + applicant)
+  thisMemberRepFactors.set('default', defaultRepFactor)
+  memberRepFactors.set(predecessor(), thisMemberRepFactors)
+}
+
 
 /**
  * Internal function that transfers tokens from one account to another
@@ -402,6 +439,7 @@ return Context.blockTimestamp
 */
 function _internalTransfer(from: AccountId, to: AccountId, token: AccountId, amount: u128): void {
   assertValidId(from)
+  assertValidId(to)
   TokenClass.transfer(from, to, token, amount)
 }
 
@@ -453,15 +491,17 @@ function _didPass(proposal: Proposal): bool {
   let totalVotes = u128.add(proposal.yesVotes, proposal.noVotes)
   let achieved = u128.muldiv(totalVotes, u128.from('100'), totalShares)
   let didPass = proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)
-
+  logging.log('didpass ' + didPass.toString())
   // check to see if we can speed up a failure vote by seeing if there is any chance number of outstanding votes exceeds no votes already cast
   let requiredVotes = getNeededVotes()
   if(u128.lt(u128.sub(totalShares, proposal.noVotes), requiredVotes)){
+    logging.log('failed here 0')
     didPass = false
   }
 
   // Make the proposal fail if the dilutionBound is exceeded 
   if(u128.lt(u128.mul(u128.add(totalShares, totalLoot), u128.from(storage.getSome<i32>('dilutionBound'))), u128.from(proposal.maxTotalSharesAndLootAtYesVote))) {
+    logging.log('failed here 2')
     didPass = false
   }
  
@@ -470,6 +510,7 @@ function _didPass(proposal: Proposal): bool {
   // - for guild kick proposals, we should never be able to propose to kick a jailed member (or have two kick proposals active), so it doesn't matter
   if(members.contains(proposal.applicant)) {
     if(members.getSome(proposal.applicant).jailed != 0) {
+      logging.log('failed here 3')
       didPass = false
     }
   }
@@ -478,17 +519,22 @@ function _didPass(proposal: Proposal): bool {
   let firstAdd = u128.add(totalShares, totalLoot)
   let secondAdd = u128.add(proposal.sharesRequested, proposal.lootRequested)
   if(u128.gt(u128.add(firstAdd, secondAdd), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT))) {
+    logging.log('failed here 4')
     didPass = false
   }
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
-  if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
-    didPass = false
+  if(u128.gt(proposal.paymentRequested, u128.Zero)){
+    if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
+      logging.log('failed here 1')
+      didPass = false
+    }
   }
   
   //Make the proposal fail if it would result in too many tokens with non-zero balance in guild bank
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
+    logging.log('failed here 5')
     didPass = false
   }
   
@@ -726,6 +772,15 @@ function _memberProposalPresent(applicant: AccountId): bool {
 
 
 /**
+ * Internal private function to determine whether there is an existing affiliation proposal for a given applicant
+ * @param applicant
+*/
+function _affiliateProposalPresent(applicant: AccountId): bool {
+  return affiliationProposals.contains(applicant)
+}
+
+
+/**
  * Internal private function to determine the larger of two integers
  * @param x
  * @param y
@@ -799,7 +854,17 @@ function _proposalPassed(proposal: Proposal): bool {
       }
     }
 
+    // initialize default roles and reputations for applicant
+    // _initializeDefaultMemberRoles(proposal.applicant)
+    // _initializeDefaultReputationFactors(proposal.applicant)
+
+    // let startRoles = memberRoles.getSome(predecessor())
+    // let startRepFactors = memberRepFactors.getSome(predecessor())
+    // startRoles.values(startRoles.min(), startRoles.max(), true),
+    //   startRepFactors.values(startRepFactors.min(), startRepFactors.max(), true)
+
     // use applicant address as delegateKey by default
+
     members.set(proposal.applicant, new Member(
       proposal.applicant, 
       proposal.sharesRequested, 
@@ -812,8 +877,8 @@ function _proposalPassed(proposal: Proposal): bool {
       Context.blockTimestamp, 
       Context.blockTimestamp, 
       true,
-      new AVLTree<string, communityRole>('y'),
-      new AVLTree<string, reputationFactor>('x')
+      new Array<communityRole>(),
+      new Array<reputationFactor>()
       ))
     
     // add link from member to proposal
@@ -927,13 +992,27 @@ function _proposalPassed(proposal: Proposal): bool {
     }
   }
 
-  //give applicant the funds requested from escrow if not a commitment   
-  if(!proposal.flags[7]){ 
+  //give applicant the funds requested from escrow if not a commitment or tribute proposal  
+  if(!proposal.flags[7] && !proposal.flags[9]){ 
     if(u128.gt(proposal.paymentRequested, u128.Zero)){
-      let transferred = _sTRaw(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
+      
+    // figure out if payout proposal is related to a funding commitment - if so, transfer from Escrow, otherwise from Fund
+      if(proposal.referenceIds.length == 0){
+        // not related to a funding commitment - take from GUILD
+        assert(TokenClass.hasBalanceFor(GUILD, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
+        let transferred = _sTRaw(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
 
-      if(transferred) {
-        TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
+        if(transferred) {
+          TokenClass.subtractFromGuild(proposal.paymentToken, proposal.paymentRequested)
+        }
+      } else {
+        // is related to a funding commitment - take from ESCROW
+        assert(TokenClass.hasBalanceFor(ESCROW, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
+        let transferred = _sTRaw(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
+
+        if(transferred) {
+          TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
+        }
       }
     }
   }
@@ -957,16 +1036,15 @@ function _proposalPassed(proposal: Proposal): bool {
  * @param proposal
 */
 function _proposalFailed(proposal: Proposal): bool {
+
   //return all tokens to the proposer if not a commitment (not the applicant, because funds come from the proposer)
-  if(!proposal.flags[7]){
-    let totalSharesAndLoot = u128.add(proposal.sharesRequested, proposal.lootRequested)
+  if(!proposal.flags[7]){    
+    // transfer user's contribution (tribute) back to them
     
-    // transfer user's contribution back to them
-    
-    let withdrawn = _sTRaw(totalSharesAndLoot, proposal.tributeToken, proposal.proposer)
+    let withdrawn = _sTRaw(proposal.tributeOffered, proposal.tributeToken, proposal.proposer)
 
     if(withdrawn) {
-      TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesAndLoot)
+      TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, proposal.tributeOffered)
     
     return true
     }
@@ -1235,12 +1313,21 @@ export function getEscrowTokenBalances(): Array<TokenBalances> {
  * returns vote for a given memberaddress and proposal id - answers how someone voted on a certain proposal
 */
 export function getMemberProposalVote(memberAddress: AccountId, proposalId: u32): string {
-   let proposal = votesByMember.getSome(memberAddress)
-   let vote = proposal.getSome(proposalId)
-   if(vote != ''){
-     return vote
-   }
-   return 'no vote yet'
+  let exists = accountVotes.contains(memberAddress)
+  if (exists){
+    let allMembersVotes = accountVotes.getSome(memberAddress)
+    let vote = allMembersVotes.get(proposalId, 'no vote yet') as string
+    if(vote != ''){
+      return vote
+    }
+    return 'no vote yet'
+  } else {
+    // initiate vote tracking
+    let newVote = new PersistentMap<u32, string>('uv' + memberAddress)
+    newVote.set(0, '')
+    accountVotes.set(memberAddress, newVote)
+    return 'no vote yet'
+  }
 }
 
 
@@ -1395,7 +1482,7 @@ export function submitMemberProposal (
     TokenClass.addToEscrow(predecessor(), tributeToken, totalAmount)
 
 
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[6] = true // member proposal
 
     let references = new Array<GenericObject>()
@@ -1421,6 +1508,73 @@ export function submitMemberProposal (
  
     return true
   }
+return false
+}
+
+
+
+/**
+ * Submit an Affiliation proposal - used to connect communities with other communities
+ * @param affiliateWith // Community one is requesting to affiliate this community with
+ * @param affiliationFee // Fee that is required to be affiliated with the other community
+ * @param affiliationToken // token used for the affiliation payment if required
+ * @param contractId
+*/
+export function submitAffiliationProposal (
+  affiliateWith: AccountId,
+  affiliationFee: u128,
+  affiliationToken: AccountId,
+  contractId: AccountId
+): bool {
+assert(tokenWhiteList.getSome(affiliationToken), ERR_NOT_WHITELISTED)
+assertValidApplicant(affiliateWith)
+
+let allAffiliations = affiliations.getSome(Context.contractName)
+assert(allAffiliations.get(affiliateWith) == null, 'already affiliated')
+
+assert(_affiliateProposalPresent(Context.contractName) == false, 'affiliation proposal already in progress')
+
+// don't allow an affiliation with an accountId we already know has bad reputation
+if(members.contains(affiliateWith)) {
+  assert(members.getSome(affiliateWith).jailed == 0, ERR_JAILED)
+}
+
+// Funds transfers
+let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+let totalAmount = u128.add(proposalDeposit, affiliationFee)
+assert(u128.eq(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
+
+let transferred = _sTRaw(totalAmount, affiliationToken, contractId)
+
+if(transferred) {
+  TokenClass.addToEscrow(predecessor(), affiliationToken, totalAmount)
+
+  let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+  flags[15] = true // affiliation proposal
+
+  let references = new Array<GenericObject>()
+  let defaultObject = new GenericObject('','')
+  references.push(defaultObject)
+
+  _submitProposal(
+    affiliateWith, 
+    u128.Zero, 
+    u128.Zero, 
+    affiliationFee, 
+    affiliationToken, 
+    u128.Zero, 
+    '', 
+    flags, 
+    new Array<string>(), 
+    new Array<string>(), 
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    references
+    )
+
+  return true
+}
 return false
 }
 
@@ -1456,7 +1610,7 @@ assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not 
 let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
 if(transferred) {
-  let flags = new Array<bool>(15) 
+  let flags = new Array<bool>(16) 
   flags[11] = true // payout proposal
 
   _submitProposal(
@@ -1519,7 +1673,7 @@ let transferred = _sTRaw(totalContribution, tributeToken, contractId)
 if(transferred) {
   TokenClass.addToEscrow(applicant, tributeToken, tributeOffered)
 
-  let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+  let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
   flags[9] = true // tribute proposal
 
   let references = new Array<GenericObject>()
@@ -1579,7 +1733,7 @@ export function submitCommitmentProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let flags = new Array<bool>(15) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     flags[7] = true // commitment
 
     _submitProposal(
@@ -1629,7 +1783,7 @@ export function submitConfigurationProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[10] = true // configuration
 
     let references = new Array<GenericObject>()
@@ -1682,7 +1836,7 @@ export function submitOpportunityProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[8] = true // opportunity
 
     let references = new Array<GenericObject>()
@@ -1737,7 +1891,7 @@ export function submitGuildKickProposal(
     let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
     if(transferred) {
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[5] = true; // guild kick
     
     let references = new Array<GenericObject>()
@@ -1783,7 +1937,7 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[4] = true; // whitelist
     
     let references = new Array<GenericObject>()
@@ -1845,7 +1999,7 @@ export function submitCommunityRoleProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
     flags[12] = true; // communityRole
 
     let newRole = new communityRole(
@@ -1921,7 +2075,7 @@ export function submitAssignRoleProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
     flags[14] = true; // assignRole
 
     let newMemberRoleConfiguration = new communityRole(
@@ -1995,7 +2149,7 @@ export function submitReputationFactorProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(15) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[13] = true; // reputationFactor
 
     let newRepFactor = new reputationFactor(
@@ -2095,8 +2249,9 @@ function _submitProposal(
     referenceIds // references to other proposals
   ))
 
-  userVotes.set(proposalId, '')
-  votesByMember.set(predecessor(), userVotes)
+  let newVote = new PersistentMap<u32, string>('uv' + predecessor())
+  newVote.set(proposalId, '')
+  accountVotes.set(predecessor(), newVote)
   
   return true
 }
@@ -2205,21 +2360,20 @@ export function submitVote(proposalId: u32, vote: string): bool {
 
   // check that proposal exists by finding it's index in the proposal vector
   assert(proposals.containsKey(proposalId), ERR_PROPOSAL_NO)
-  
   let proposal = proposals.getSome(proposalId)
-  
+
   // ensure it's a valid vote and that we are still in the voting period (between start and end times)
   assert(vote == 'yes' || vote=='no', ERR_VOTE_INVALID)
   assert(getCurrentPeriod() >= proposal.startingPeriod, ERR_VOTING_NOT_STARTED)
   assert(getCurrentPeriod() <= proposal.votingPeriod, ERR_VOTING_PERIOD_EXPIRED)
-  
+
   // check to see if this member has already voted
   let existingVote = getMemberProposalVote(predecessor(), proposalId)
   assert(existingVote == 'no vote yet', ERR_ALREADY_VOTED)
-
-  userVotes.set(proposalId, vote)
-  votesByMember.set(predecessor(), userVotes)
-  //votesByMember.push({user: predecessor(), proposalId: proposalId, vote: vote})
+ 
+  let newVote = new PersistentMap<u32, string>('uv' + predecessor())
+  newVote.set(proposalId, vote)
+  accountVotes.set(predecessor(), newVote)
 
   if(vote == 'yes') {
     let allVotingShares = u128.add(member.shares, member.receivedDelegations)
@@ -2302,7 +2456,7 @@ export function processProposal(proposalId: u32): bool {
 
   // get outcome of the vote
   let didPass = _didPass(proposal)
-
+ 
   if(didPass){
     _proposalPassed(proposal)
   } else {

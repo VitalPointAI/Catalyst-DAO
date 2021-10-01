@@ -19,13 +19,12 @@ export type Balance = u128
 export const contributions = new AVLTree<DonationId, Donation>('d')
 /** proposal Id to proposal */
 export const proposals = new AVLTree<ProposalId, Proposal>('p')
-/** member to proposal to votes */
-export const userVotes = new PersistentUnorderedMap<ProposalId, Vote>('uv')
-export const votesByMember = new PersistentMap<AccountId, UserVoteMap>('v')
 /** maps account to its Member model */
 export const members = new PersistentMap<string, Member>('m') 
 /** Maps account name to memberProposal */
 export const memberProposals = new PersistentUnorderedMap<AccountId, Proposal>('mp')
+/** Maps account name to affiliation Proposal */
+export const affiliationProposals = new PersistentUnorderedMap<AccountId, Proposal>('ap')
 // Roles Structures
 /** roles assigned to member - member to roleName to role */
 export const memberRoles = new PersistentUnorderedMap<AccountId, AVLTree<RoleName, communityRole>>('mr') 
@@ -50,13 +49,12 @@ export const memberAddressByDelegatekey = new PersistentMap<string, string>('md'
 export const approvedTokens = new PersistentVector<AccountId>('a')
 /** Map delegatee to shares */
 export type DelegateeMap = AVLTree<Delegatee, DelegationInfo>
-/** Maps proposalId to votes */
-export type UserVoteMap = PersistentUnorderedMap<ProposalId, Vote>
-/** Maps token name to balance */
-//export type TokenBalanceMap = PersistentUnorderedMap<TokenName, Balance>
+/** Maps account to proposalId to vote */
+export const accountVotes = new PersistentUnorderedMap<AccountId, PersistentMap<ProposalId, Vote>>('av')
+/** Maps account to token name to balance */
 export const tokenBalances = new PersistentUnorderedMap<AccountId, PersistentMap<TokenName, Balance>>('tob')
-
-
+/** Maps community (contractId) to affiliated community (contractId) to affiliatedCommunity details */
+export const affiliations = new PersistentUnorderedMap<ContractId, PersistentMap<ContractId, AffiliationDetails>>('af')
 @nearBindgen
 export class TokenAccounting {
     constructor(
@@ -77,83 +75,105 @@ export class TokenAccounting {
 
     /** Sets a users balance for a token and creates inner map if not present. */
     add(account: AccountId, token: TokenName, balance: Balance = u128.Zero): void {
-    let tokenMap = this.getTokenMap(account, token, balance);
-    tokenMap.set(token, u128.add(tokenMap.get(token, u128.Zero) as u128, balance));
-    tokenBalances.set(account, tokenMap);
+        let tokenMap = this.getTokenMap(account, token, balance);
+        tokenMap.set(token, u128.add(tokenMap.get(token, u128.Zero) as u128, balance));
+        tokenBalances.set(account, tokenMap);
     }
 
     sub(account: AccountId, token: TokenName, balance: Balance): void {
-    let tokenMap = this.getTokenMap(account, token, balance);
-    tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
-    tokenBalances.set(account, tokenMap);
+        let tokenMap = this.getTokenMap(account, token, balance);
+        tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
+        tokenBalances.set(account, tokenMap);
     }
 
     get(account: AccountId, token: TokenName): u128 {
-    let tokenMap = tokenBalances.getSome(account);
-    if (tokenMap == null) return u128.Zero;
-    // Need the as below to tell the IDE that it won't return null
-    return tokenMap.get(token, u128.Zero) as u128;
+        let exists = tokenBalances.contains(account)
+        logging.log('exists' + exists.toString())
+        if(exists){
+            let tokenMap = tokenBalances.getSome(account)
+            logging.log('here')
+            return tokenMap.get(token, u128.Zero) as u128
+        } else {
+            logging.log('empty')
+            return u128.Zero
+        }
     }
 
     addContribution(account: AccountId, token: TokenName, balance: Balance): void {
-    this.add(account, token, balance);
-    this.add(GUILD, token, balance);
-    this.add(TOTAL, token, balance);
+        this.add(account, token, balance);
+        this.add(GUILD, token, balance);
+        this.add(TOTAL, token, balance);
     }
 
     transfer(from: AccountId, to: AccountId, token: string, balance: Balance): void {
-    this.assertBalance(from, token, balance);
-    this.sub(from, token, balance);
-    this.add(to, token, balance);
+        this.assertBalance(from, token, balance);
+        this.sub(from, token, balance);
+        this.add(to, token, balance);
     }
 
     hasBalanceFor(account: AccountId, token: TokenName, balance: Balance): boolean {
-    const fromBalance = this.get(account, token);
-    return u128.gt(fromBalance, balance) as boolean;
+        const fromBalance = this.get(account, token);
+        return u128.ge(fromBalance, balance) as boolean;
     }
 
     assertBalance(account: AccountId, token: TokenName, balance: Balance): void {
-    assert(this.hasBalanceFor(account, token, balance), ERR_INSUFFICIENT_BALANCE)
+        assert(this.hasBalanceFor(account, token, balance), ERR_INSUFFICIENT_BALANCE)
     }
 
     exists(account: AccountId, token: TokenName): boolean {
-    return u128.gt(this.get(account, token), u128.Zero) as boolean;
+        return u128.gt(this.get(account, token), u128.Zero) as boolean;
     }
 
     isZero(account: AccountId, token: TokenName): boolean {
-    return !this.exists(account, token);
+        return !this.exists(account, token);
     }
 
     withdrawFromGuild(account: AccountId, token: TokenName, balance: Balance): void {
-    this.sub(GUILD, token, balance);
-    this.withdrawFromTotal(account, token, balance);
+        this.sub(GUILD, token, balance);
+        this.withdrawFromTotal(account, token, balance);
     }
 
     withdrawFromEscrow(account: AccountId, token: TokenName, balance: Balance): void {
-    this.sub(ESCROW, token, balance);
-    this.withdrawFromTotal(account, token, balance);
+        this.sub(ESCROW, token, balance);
+        this.withdrawFromTotal(account, token, balance);
     }
 
     subtractFromEscrow(token: TokenName, balance: Balance): void {
-    this.sub(ESCROW, token, balance);
-    this.sub(TOTAL, token, balance);
+        assert(this.hasBalanceFor(ESCROW, token, balance), ERR_INSUFFICIENT_BALANCE)
+        this.sub(ESCROW, token, balance);
+        this.sub(TOTAL, token, balance);
+    }
+
+    subtractFromGuild(token: TokenName, balance: Balance): void {
+        assert(this.hasBalanceFor(GUILD, token, balance), ERR_INSUFFICIENT_BALANCE)
+        this.sub(GUILD, token, balance);
+        this.sub(TOTAL, token, balance);
     }
 
     withdrawFromTotal(account: AccountId, token: TokenName, balance:u128): void {
-    this.sub(account, token, balance);
-    this.sub(TOTAL, token, balance);
+        this.sub(account, token, balance);
+        this.sub(TOTAL, token, balance);
     }  
 
     addToEscrow(account: AccountId, token: TokenName, balance: Balance): void {
-    this.add(account, token, balance);
-    this.add(ESCROW, token, balance);
-    this.add(TOTAL, token, balance);
+        this.add(account, token, balance);
+        this.add(ESCROW, token, balance);
+        this.add(TOTAL, token, balance);
     }
 
     addToGuild(token: TokenName, balance: Balance): void {
-    this.add(GUILD, token, balance);
-    this.add(TOTAL, token, balance);
+        this.add(GUILD, token, balance);
+        this.add(TOTAL, token, balance);
     }
+}
+
+@nearBindgen
+export class AffiliationDetails {
+    constructor(
+        public affiliationFee: u128,
+        public affiliationDate: u64
+    )
+    {}
 }
 
 @nearBindgen
@@ -280,9 +300,9 @@ export class Member {
     /** is member currently active in the community (true) or have they left (false) */
     public active: bool,
     /** community roles member currently has */
-    public roles: AVLTree<string, communityRole>, 
+    public roles: Array<communityRole>, 
     /** reputation factors that currently make up member's reputation score */
-    public reputation: AVLTree<string, reputationFactor>,
+    public reputation: Array<reputationFactor>,
     )
     {}
 
@@ -372,6 +392,7 @@ export class Proposal {
                             12: communityRole, 
                             13: reputationFactor, 
                             14: assignRole
+                            15: affiliation
                         ]
                         */
     public flags: Array<bool>, 
