@@ -109,6 +109,7 @@ export const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of sha
 export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
 export const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank
 export const MAX_DELEGATION_LIMIT: u32 = 10 // maximum number of delegations someone can do (prevent running out of gas when performing bulk undelegate actions)
+export const ONE_NEAR = u128.from('1000000000000000000000000')
 
 // ********************
 // MODIFIERS
@@ -800,7 +801,7 @@ function _max(x: u64, y: u64): u64 {
  * @param proposalIndex
  * @param proposal
 */
-function _proposalPassed(proposal: Proposal): bool {
+function _proposalPassed(proposal: Proposal, platformPayment: u128): bool {
  
   // mark proposal as passed 
   let flags = proposal.flags
@@ -994,23 +995,16 @@ function _proposalPassed(proposal: Proposal): bool {
   if(!proposal.flags[7] && !proposal.flags[9]){ 
     if(u128.gt(proposal.paymentRequested, u128.Zero)){
 
-      // determine platform support amounts
-      let percentFee = storage.getSome<u128>('platformSupportPercent')
-      let platformAccount = storage.getSome<AccountId>('platformAccount')
-
-      let supportAmount = u128.Zero
-      if(u128.gt(percentFee, u128.Zero)){
-        supportAmount = u128.muldiv(proposal.paymentRequested, percentFee, u128.from('100'))
-      }
-      let payoutAmount = u128.sub(proposal.paymentRequested, supportAmount)
+    let platformAccount = storage.getSome<AccountId>('platformAccount')
+    let payoutAmount = u128.sub(proposal.paymentRequested, platformPayment)
       
     // figure out if payout proposal is related to a funding commitment - if so, transfer from Escrow, otherwise from Fund
       if(proposal.referenceIds.length == 0){
         // not related to a funding commitment - take from GUILD
         
         assert(TokenClass.hasBalanceFor(GUILD, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
-        if(u128.gt(supportAmount, u128.Zero)){
-          let supportPayment = _sTRaw(supportAmount, depositToken, platformAccount)
+        if(u128.gt(platformPayment, u128.Zero)){
+          _sTRaw(platformPayment, depositToken, platformAccount)
         }
         let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
 
@@ -1020,8 +1014,8 @@ function _proposalPassed(proposal: Proposal): bool {
       } else {
         // is related to a funding commitment - take from ESCROW
         assert(TokenClass.hasBalanceFor(ESCROW, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
-        if(u128.gt(supportAmount, u128.Zero)){
-          let supportPayment = _sTRaw(supportAmount, depositToken, platformAccount)
+        if(u128.gt(platformPayment, u128.Zero)){
+          _sTRaw(platformPayment, depositToken, platformAccount)
         }
         let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
 
@@ -1113,6 +1107,24 @@ function _sTRaw(amount: u128, token: AccountId, account: AccountId): bool {
 */
 export function getInit(): string | null {
   return storage.get<string>("init", "none")
+}
+
+
+/**
+ * returns platform account 
+ * @returns platform account
+ */
+export function getPlatformAccount(): string | null {
+  return storage.get<AccountId>("platformAccount", "none")
+}
+
+
+/**
+ * returns platform percentage
+ * @returns 
+ */
+export function getPlatformPercentage(): u128 | null {
+  return storage.get<u128>("platformSupportPercent", u128.Zero)
 }
 
 
@@ -2364,21 +2376,29 @@ export function sponsorProposal(
       let exists = proposals.containsKey(proposalId)
       if(exists){
         let prevProposalStartTime = proposals.getSome(proposalId)
-        comparison = prevProposalStartTime.startingPeriod
+        if(prevProposalStartTime.startingPeriod > 0){
+          comparison = prevProposalStartTime.startingPeriod
+          } else {
+            comparison = getCurrentPeriod()
+          }
       }
     }
     if(proposals.size > 1){
       let exists = proposals.containsKey(proposalId-1)
       if(exists){
         let prevProposalStartTime = proposals.getSome(proposalId-1)
+        if(prevProposalStartTime.startingPeriod > 0){
         comparison = prevProposalStartTime.startingPeriod
+        } else {
+          comparison = getCurrentPeriod()
+        }
       }
     }
     
     let max = _max(getCurrentPeriod(), comparison)
     let startingPeriod = (max + 1) as u64
-    let votingPeriod = startingPeriod + (storage.getSome<i32>('votingPeriodLength') as u64 * storage.getSome<i32>('periodDuration') as u64 * 1000000000)
-    let gracePeriod = votingPeriod + (storage.getSome<i32>('gracePeriodLength') as u64 * storage.getSome<i32>('periodDuration') as u64 * 1000000000)
+    let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') as u64 
+    let gracePeriod = votingPeriod + storage.getSome<i32>('gracePeriodLength') as u64 
 
     let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
 
@@ -2480,7 +2500,7 @@ export function submitVote(proposalId: u32, vote: string): bool {
  * Process proposal - process a proposal that has gone through the voting period and return deposit to sponsor and proposer
  * @param proposalId // proposal index used to find the proposal
 */
-export function processProposal(proposalId: u32): bool {
+export function processProposal(proposalId: u32, platformPayment: u128): bool {
 
   // check to make sure the proposal is ready for processing
   let proposal = proposals.getSome(proposalId)
@@ -2512,7 +2532,7 @@ export function processProposal(proposalId: u32): bool {
   let didPass = _didPass(proposal)
  
   if(didPass){
-    _proposalPassed(proposal)
+    _proposalPassed(proposal, platformPayment)
   } else {
     _proposalFailed(proposal)
   }
