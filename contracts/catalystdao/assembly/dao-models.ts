@@ -1,4 +1,4 @@
-import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap, logging } from 'near-sdk-as'
+import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap } from 'near-sdk-as'
 import { ERR_INSUFFICIENT_BALANCE, ERR_NOT_A_MEMBER, ERR_NOT_DELEGATE } from './dao-error-messages'
 import { AccountId, GUILD, ESCROW, TOTAL } from './dao-types'
 import { isPositive } from './utils'
@@ -10,9 +10,10 @@ export type DonationId = u32
 export type ProposalId = u32
 export type Vote = string
 export type Delegatee = string
-export type Shares = i32
+export type Shares = u128
 export type TokenName = string
 export type Balance = u128
+export type ReceivedFrom = string
 
 // Data Storage
 /**donation Id to donations*/
@@ -22,7 +23,7 @@ export const proposals = new AVLTree<ProposalId, Proposal>('p')
 /** maps account to its Member model */
 export const members = new PersistentMap<string, Member>('m') 
 /** Maps account name to memberProposal */
-export const memberProposals = new PersistentUnorderedMap<AccountId, Proposal>('mp')
+export const memberProposals = new PersistentMap<AccountId, string>('mp')
 /** Maps account name to affiliation Proposal */
 export const affiliationProposals = new PersistentUnorderedMap<AccountId, Proposal>('ap')
 // Roles Structures
@@ -35,8 +36,6 @@ export const roles = new PersistentUnorderedMap<ContractId, AVLTree<RoleName, co
 export const memberRepFactors = new PersistentUnorderedMap<AccountId, AVLTree<ReputationFactorName, reputationFactor>>('rf') 
 /** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
 export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, reputationFactor>>('crf') 
-/** map person delegating to delegation info */
-export const memberDelegations = new PersistentMap<AccountId, DelegateeMap>('md')
 /** maps token name to whether it is whitelisted or not */
 export const tokenWhiteList = new PersistentMap<string, bool>('tw') 
 /** maps token name to whether it has been proposed for white listing or not */
@@ -47,14 +46,17 @@ export const proposedToKick = new PersistentMap<string, bool>('pk')
 export const memberAddressByDelegatekey = new PersistentMap<string, string>('md')
 /** array of approvedtokens */
 export const approvedTokens = new PersistentVector<AccountId>('a')
-/** Map delegatee to shares */
-export type DelegateeMap = AVLTree<Delegatee, DelegationInfo>
 /** Maps account to proposalId to vote */
 export const accountVotes = new PersistentUnorderedMap<AccountId, PersistentMap<ProposalId, Vote>>('av')
 /** Maps account to token name to balance */
 export const tokenBalances = new PersistentUnorderedMap<AccountId, PersistentMap<TokenName, Balance>>('tob')
 /** Maps community (contractId) to affiliated community (contractId) to affiliatedCommunity details */
 export const affiliations = new PersistentUnorderedMap<ContractId, PersistentMap<ContractId, AffiliationDetails>>('af')
+/** Maps Member account to Delegate account to delegate info */
+export const memberDelegations = new PersistentUnorderedMap<AccountId, AVLTree<Delegatee, DelegationInfo>>('mde')
+/** Maps Member account to Account (receiving delegations from) to amount */
+export const receivedDelegations = new PersistentUnorderedMap<AccountId, AVLTree<AccountId, Shares>>('rf')
+
 @nearBindgen
 export class TokenAccounting {
     constructor(
@@ -88,13 +90,10 @@ export class TokenAccounting {
 
     get(account: AccountId, token: TokenName): u128 {
         let exists = tokenBalances.contains(account)
-        logging.log('exists' + exists.toString())
         if(exists){
             let tokenMap = tokenBalances.getSome(account)
-            logging.log('here')
             return tokenMap.get(token, u128.Zero) as u128
         } else {
-            logging.log('empty')
             return u128.Zero
         }
     }
@@ -371,7 +370,7 @@ export class Proposal {
     /** paymentToken: payment token contract reference (type of payment token) */
     public paymentToken: AccountId,
     /** startingPeriod: the period in which voting can start for this proposal */
-    public startingPeriod: i32,
+    public startingPeriod: u64,
     /** yesVotes: the total number of YES votes for this proposal */
     public yesVotes: u128,
     /** noVotes: the total number of NO votes for this proposal */
@@ -401,9 +400,9 @@ export class Proposal {
     /** proposalSubmitted: blockindex when proposal was submitted */
     public proposalSubmitted: u64,
     /** voting period */
-    public votingPeriod: i32,
+    public votingPeriod: u64,
     /** grace period */
-    public gracePeriod: i32,
+    public gracePeriod: u64,
     /** roles to assign to member */
     public roleNames: Array<string>,
     /** block timestamp of when vote was finalized */

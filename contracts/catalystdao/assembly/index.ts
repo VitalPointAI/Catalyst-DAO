@@ -45,7 +45,8 @@ import {
   TokenAccounting,
   accountVotes,
   affiliations,
-  affiliationProposals
+  affiliationProposals,
+  receivedDelegations
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
@@ -107,7 +108,7 @@ export const MAX_DILUTION_BOUND: i32 = 10**8 // maximum dilution bound
 export const MAX_NUMBER_OF_SHARES_AND_LOOT: i32 = 10**8 // maximum number of shares that can be minted
 export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelisted tokens
 export const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank
-
+export const MAX_DELEGATION_LIMIT: u32 = 10 // maximum number of delegations someone can do (prevent running out of gas when performing bulk undelegate actions)
 
 // ********************
 // MODIFIERS
@@ -171,6 +172,7 @@ export function onlyDelegate(delegate: AccountId): boolean {
  * @param _shares
  * @param _contribution
  * @param _contractId
+ * @param _platformSupport
  */
 
 export function init(
@@ -183,6 +185,8 @@ export function init(
     _voteThreshold: VoteThreshold,
     _shares: u128,
     _contribution: u128,
+    _platformSupportPercent: u128,
+    _platformAccount: AccountId,
     _contractId: AccountId
 ): u64 {
   assert(storage.get<string>("init") == null, ERR_DAO_ALREADY_INITIALIZED)
@@ -198,6 +202,7 @@ export function init(
   assert(_approvedTokens.length <= MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_TOKENS)
   assert(u128.le(_shares, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
   assertValidId(_contractId)
+  assertValidId(_platformAccount)
   assert(u128.eq(Context.attachedDeposit, _contribution), 'attached deposit must match shares')
  
   depositToken = _approvedTokens[0]
@@ -236,6 +241,10 @@ export function init(
   //set voteThreshold
   storage.set<i32>('voteThreshold', _voteThreshold)
 
+  //set platformSupport
+  storage.set<u128>('platformSupportPercent', _platformSupportPercent)
+  storage.set<AccountId>('platformAccount', _platformAccount)
+
   //set summoning Time
   storage.set<u64>('summoningTime', Context.blockTimestamp)
 
@@ -253,32 +262,6 @@ export function init(
   
   if(transferred) {
     TokenClass.addContribution(predecessor(), depositToken, _contribution)
-
-    // *******************
-    // ROLES INITIALIZATION
-    // *******************
-    let defaultPermissions = new Array<string>()
-    defaultPermissions.push('read')
-   
-    const defaultMemberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
-   
-    let communitysRoles = new AVLTree<string, communityRole>('dcr')
-    communitysRoles.set('default', defaultMemberRole)
-    roles.set(Context.contractName, communitysRoles)
-    
-    _initializeDefaultMemberRoles(predecessor())
-    
-    // create empty reputation factors holder
-    const defRepFactor = new reputationFactor('', u128.Zero, Context.blockTimestamp, 0, 'default reputation factor', new Array<string>(), new Array<string>(), '' )
-    
-    let communityRepFactors = new AVLTree<string, reputationFactor>('crfs')
-    communityRepFactors.set('default', defRepFactor)
-    reputationFactors.set(Context.contractName, communityRepFactors)
-
-    _initializeDefaultReputationFactors(predecessor())
-
-    let startRoles = memberRoles.getSome(predecessor())
-    let startRepFactors = memberRepFactors.getSome(predecessor())
  
     // makes member object for summoner and puts it into the members storage
     members.set(predecessor(), 
@@ -294,8 +277,8 @@ export function init(
         Context.blockTimestamp, 
         Context.blockTimestamp, 
         true,
-        startRoles.values(startRoles.min(), startRoles.max(), true),
-        startRepFactors.values(startRepFactors.min(), startRepFactors.max(), true)
+        new Array<communityRole>(),
+        new Array<reputationFactor>()
         ))
     
     // initiate vote tracking
@@ -326,6 +309,8 @@ export function init(
  * @param proposalDeposit
  * @param dilutionBound
  * @param voteThreshold
+ * @param platformSupportPercent
+ * @param platformAccount
  */
 export function setInit(
   _periodDuration: PeriodDuration,
@@ -333,7 +318,9 @@ export function setInit(
   _gracePeriodLength: GracePeriodLength,
   _proposalDeposit: ProposalDeposit,
   _dilutionBound: DilutionBound,
-  _voteThreshold: VoteThreshold
+  _voteThreshold: VoteThreshold,
+  _platformSupportPercent: u128,
+  _platformAccount: AccountId,
 ): u64 {
   assert(isOwner(predecessor()), 'not the owner')
   return _setInit(
@@ -342,7 +329,9 @@ export function setInit(
     _gracePeriodLength,
     _proposalDeposit,
     _dilutionBound,
-    _voteThreshold
+    _voteThreshold,
+    _platformSupportPercent,
+    _platformAccount
   )
 }
 
@@ -362,7 +351,9 @@ function _setInit(
   _gracePeriodLength: GracePeriodLength,
   _proposalDeposit: ProposalDeposit,
   _dilutionBound: DilutionBound,
-  _voteThreshold: VoteThreshold
+  _voteThreshold: VoteThreshold,
+  _platformSupportPercent: u128,
+  _platformAccount: AccountId,
 ): u64 {
 assert(_periodDuration > 0, ERR_MUSTBE_GREATERTHAN_ZERO)
 assert(_votingPeriodLength > 0, ERR_MUSTBE_GREATERTHAN_ZERO)
@@ -394,6 +385,10 @@ storage.set<i32>('voteThreshold', _voteThreshold)
 //set dao update time
 storage.set<u64>('updated', Context.blockTimestamp)
 
+//set platformSupport
+storage.set<u128>('platformSupportPercent', _platformSupportPercent)
+storage.set<AccountId>('platformAccount', _platformAccount)
+
 return Context.blockTimestamp
 }
 
@@ -405,13 +400,20 @@ return Context.blockTimestamp
  * Internal function to initalize and assign default role to new member
  * @param applicant
 */
-function _initializeDefaultMemberRoles(applicant: AccountId): void {
-  let currentRoles = roles.getSome(Context.contractName)
-  let defaultRole = currentRoles.getSome('default')
+export function initializeDefaultMemberRoles(applicant: AccountId): void {
+   
+  let defaultPermissions = new Array<string>()
+  defaultPermissions.push('read')
+  
+  const defaultMemberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
+  
+  let communitysRoles = new AVLTree<string, communityRole>('dcr')
+  communitysRoles.set('default', defaultMemberRole)
+  roles.set(Context.contractName, communitysRoles)
 
   // assign default member role
   let thisMemberRoles = new AVLTree<string, communityRole>('dmr' + applicant)
-  thisMemberRoles.set('default', defaultRole)
+  thisMemberRoles.set('default', defaultMemberRole)
   memberRoles.set(predecessor(), thisMemberRoles)
 }
 
@@ -419,13 +421,18 @@ function _initializeDefaultMemberRoles(applicant: AccountId): void {
  * 
  * @param applicant
  */
-function _initializeDefaultReputationFactors(applicant: AccountId): void {
-  let currentRepFactors = reputationFactors.getSome(Context.contractName)
-  let defaultRepFactor = currentRepFactors.getSome('default')
+export function initializeDefaultReputationFactors(applicant: AccountId): void {
+  
+  // create empty reputation factors holder
+  const defRepFactor = new reputationFactor('', u128.Zero, Context.blockTimestamp, 0, 'default reputation factor', new Array<string>(), new Array<string>(), '' )
+  
+  let communityRepFactors = new AVLTree<string, reputationFactor>('crfs')
+  communityRepFactors.set('default', defRepFactor)
+  reputationFactors.set(Context.contractName, communityRepFactors)
 
   //assign default reputation factor
   let thisMemberRepFactors = new AVLTree<string, reputationFactor>('rf' + applicant)
-  thisMemberRepFactors.set('default', defaultRepFactor)
+  thisMemberRepFactors.set('default', defRepFactor)
   memberRepFactors.set(predecessor(), thisMemberRepFactors)
 }
 
@@ -491,17 +498,15 @@ function _didPass(proposal: Proposal): bool {
   let totalVotes = u128.add(proposal.yesVotes, proposal.noVotes)
   let achieved = u128.muldiv(totalVotes, u128.from('100'), totalShares)
   let didPass = proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)
-  logging.log('didpass ' + didPass.toString())
+  
   // check to see if we can speed up a failure vote by seeing if there is any chance number of outstanding votes exceeds no votes already cast
   let requiredVotes = getNeededVotes()
   if(u128.lt(u128.sub(totalShares, proposal.noVotes), requiredVotes)){
-    logging.log('failed here 0')
     didPass = false
   }
 
   // Make the proposal fail if the dilutionBound is exceeded 
   if(u128.lt(u128.mul(u128.add(totalShares, totalLoot), u128.from(storage.getSome<i32>('dilutionBound'))), u128.from(proposal.maxTotalSharesAndLootAtYesVote))) {
-    logging.log('failed here 2')
     didPass = false
   }
  
@@ -510,7 +515,6 @@ function _didPass(proposal: Proposal): bool {
   // - for guild kick proposals, we should never be able to propose to kick a jailed member (or have two kick proposals active), so it doesn't matter
   if(members.contains(proposal.applicant)) {
     if(members.getSome(proposal.applicant).jailed != 0) {
-      logging.log('failed here 3')
       didPass = false
     }
   }
@@ -519,14 +523,12 @@ function _didPass(proposal: Proposal): bool {
   let firstAdd = u128.add(totalShares, totalLoot)
   let secondAdd = u128.add(proposal.sharesRequested, proposal.lootRequested)
   if(u128.gt(u128.add(firstAdd, secondAdd), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT))) {
-    logging.log('failed here 4')
     didPass = false
   }
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
   if(u128.gt(proposal.paymentRequested, u128.Zero)){
     if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
-      logging.log('failed here 1')
       didPass = false
     }
   }
@@ -534,7 +536,6 @@ function _didPass(proposal: Proposal): bool {
   //Make the proposal fail if it would result in too many tokens with non-zero balance in guild bank
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
-    logging.log('failed here 5')
     didPass = false
   }
   
@@ -689,6 +690,10 @@ export function cancelProposal(proposalId: u32, tribute: u128, loot: u128): Prop
   proposal.flags = flags
   proposals.set(proposal.proposalId, proposal)
 
+  if(flags[6]){
+    memberProposals.delete(proposal.applicant)
+  }
+
   // return proposal deposit
   let returned = _returnDeposit(proposal.proposer)
 
@@ -785,7 +790,7 @@ function _affiliateProposalPresent(applicant: AccountId): bool {
  * @param x
  * @param y
 */
-function _max(x: i32, y: i32): i32 {
+function _max(x: u64, y: u64): u64 {
   return x >= y ? x : y
 }
 
@@ -808,7 +813,7 @@ function _proposalPassed(proposal: Proposal): bool {
     let member = members.getSome(proposal.applicant)
     let newShares = u128.add(member.shares, proposal.sharesRequested)
     let newLoot = u128.add(member.loot, proposal.lootRequested)
-
+ 
     members.set(proposal.applicant, new Member(
       member.delegateKey,
       newShares,
@@ -824,16 +829,16 @@ function _proposalPassed(proposal: Proposal): bool {
       member.roles,
       member.reputation
       ))
-
+    
   } else {
     // the applicant is a new member, create a new record for them
-
+  
     // if the applicant address is already taken by a member's delegateKey, reset it to their member address
     if(memberAddressByDelegatekey.contains(proposal.applicant)){
       if(members.contains(memberAddressByDelegatekey.getSome(proposal.applicant))) {
         let memberToOverride = memberAddressByDelegatekey.getSome(proposal.applicant)
         memberAddressByDelegatekey.set(memberToOverride, memberToOverride)
-    
+   
         let member = members.getSome(memberToOverride)
   
         members.set(memberToOverride, new Member(
@@ -854,15 +859,6 @@ function _proposalPassed(proposal: Proposal): bool {
       }
     }
 
-    // initialize default roles and reputations for applicant
-    // _initializeDefaultMemberRoles(proposal.applicant)
-    // _initializeDefaultReputationFactors(proposal.applicant)
-
-    // let startRoles = memberRoles.getSome(predecessor())
-    // let startRepFactors = memberRepFactors.getSome(predecessor())
-    // startRoles.values(startRoles.min(), startRoles.max(), true),
-    //   startRepFactors.values(startRepFactors.min(), startRepFactors.max(), true)
-
     // use applicant address as delegateKey by default
 
     members.set(proposal.applicant, new Member(
@@ -880,14 +876,14 @@ function _proposalPassed(proposal: Proposal): bool {
       new Array<communityRole>(),
       new Array<reputationFactor>()
       ))
-    
+   
     // add link from member to proposal
-    memberProposals.set(proposal.applicant, proposal)
+   
 
     let totalMembers = storage.getSome<u128>('totalMembers')
     totalMembers = u128.add(totalMembers, u128.from(1))
     storage.set('totalMembers', totalMembers)
-
+   
     memberAddressByDelegatekey.set(proposal.applicant, proposal.applicant)
   }
 
@@ -895,18 +891,18 @@ function _proposalPassed(proposal: Proposal): bool {
   let currentTotalShares = storage.getSome<u128>('totalShares')
   let newTotalShares = u128.add(currentTotalShares, proposal.sharesRequested)
   storage.set<u128>('totalShares', newTotalShares)
-
+ 
   let currentTotalLoot = storage.getSome<u128>('totalLoot')
   let newTotalLoot = u128.add(currentTotalLoot, proposal.lootRequested)
   storage.set<u128>('totalLoot', newTotalLoot)
-
+ 
   // if the proposal tribute is the first tokens of its kind to make it into the guild bank, increment total guild bank tokens
   if(u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(proposal.tributeOffered, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens + 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
   }
-
+  
   // If commitment, move funds from bank to escrow
   if(proposal.flags[7]){
     _internalTransfer(GUILD, ESCROW, proposal.paymentToken, proposal.paymentRequested)
@@ -920,7 +916,9 @@ function _proposalPassed(proposal: Proposal): bool {
       <i32>parseInt(proposal.configuration[2]), //gracePeriodLength
       u128.from(proposal.configuration[3]), //proposalDeposit
       <i32>parseInt(proposal.configuration[4]),  //dilutionBound
-      <i32>parseInt(proposal.configuration[5]) //voteThreshold)
+      <i32>parseInt(proposal.configuration[5]), //voteThreshold)
+      u128.from(proposal.configuration[6]), // platformFeePercent
+      <AccountId>(proposal.configuration[7]) // platformAccount
     )
   }
 
@@ -992,15 +990,29 @@ function _proposalPassed(proposal: Proposal): bool {
     }
   }
 
-  //give applicant the funds requested from escrow if not a commitment or tribute proposal  
+  //give applicant the funds requested from escrow if not a commitment or tribute proposal less platform fee  
   if(!proposal.flags[7] && !proposal.flags[9]){ 
     if(u128.gt(proposal.paymentRequested, u128.Zero)){
+
+      // determine platform support amounts
+      let percentFee = storage.getSome<u128>('platformSupportPercent')
+      let platformAccount = storage.getSome<AccountId>('platformAccount')
+
+      let supportAmount = u128.Zero
+      if(u128.gt(percentFee, u128.Zero)){
+        supportAmount = u128.muldiv(proposal.paymentRequested, percentFee, u128.from('100'))
+      }
+      let payoutAmount = u128.sub(proposal.paymentRequested, supportAmount)
       
     // figure out if payout proposal is related to a funding commitment - if so, transfer from Escrow, otherwise from Fund
       if(proposal.referenceIds.length == 0){
         // not related to a funding commitment - take from GUILD
+        
         assert(TokenClass.hasBalanceFor(GUILD, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
-        let transferred = _sTRaw(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
+        if(u128.gt(supportAmount, u128.Zero)){
+          let supportPayment = _sTRaw(supportAmount, depositToken, platformAccount)
+        }
+        let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
 
         if(transferred) {
           TokenClass.subtractFromGuild(proposal.paymentToken, proposal.paymentRequested)
@@ -1008,7 +1020,10 @@ function _proposalPassed(proposal: Proposal): bool {
       } else {
         // is related to a funding commitment - take from ESCROW
         assert(TokenClass.hasBalanceFor(ESCROW, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
-        let transferred = _sTRaw(proposal.paymentRequested, proposal.paymentToken, proposal.applicant)
+        if(u128.gt(supportAmount, u128.Zero)){
+          let supportPayment = _sTRaw(supportAmount, depositToken, platformAccount)
+        }
+        let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
 
         if(transferred) {
           TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
@@ -1026,7 +1041,7 @@ function _proposalPassed(proposal: Proposal): bool {
     let newTotalGuildBankTokens = totalGuildBankTokens - 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
   }
-
+ 
   return true
 }
 
@@ -1129,6 +1144,9 @@ export function getInitSettings(): Array<Array<string>> {
 
   //set summoning Time
   let summoningTime = storage.getSome<u64>('summoningTime')
+
+  //set platform Percent
+  let platformPercent = storage.getSome<u128>('platformSupportPercent')
  
   settings.push([
     summoner, 
@@ -1138,7 +1156,8 @@ export function getInitSettings(): Array<Array<string>> {
     proposalDeposit.toString(),
     dilutionBound.toString(),
     voteThreshold.toString(),
-    summoningTime.toString()
+    summoningTime.toString(),
+    platformPercent.toString()
   ])
 
   return settings
@@ -1257,13 +1276,13 @@ export function getTotalMembers(): u128 {
 /**
  * returns current period which is used in timing activities in the community DAO
 */
-export function getCurrentPeriod(): i32 {
+export function getCurrentPeriod(): u64 {
   let summonTime = storage.getSome<u64>('summoningTime') // blocktimestamp that dao was summoned
-  let pd:u64 = <u64>storage.getSome<i32>('periodDuration') * 1000000000 // duration converted to nanoseconds for each period
+  let pd = storage.getSome<i32>('periodDuration') as u64 * 1000000000 // duration converted to nanoseconds for each period
   if(pd != 0) {
     let interim = Context.blockTimestamp - summonTime
     let result = interim / pd
-    return <i32>result
+    return result
   }
   return 0
 }
@@ -1340,8 +1359,23 @@ export function getCurrentShare(member: AccountId): u128 {
   let totalLoot = storage.getSome<u128>('totalLoot')
   let depositToken = storage.getSome<string>('depositToken')
   let totalSharesAndLoot = u128.add(totalShares, totalLoot)
+  // ensure to subtract any delegated shares before calculating
   let fairShare = _fairShare(TokenClass.get(GUILD, depositToken), u128.add(thisMember.shares, thisMember.loot), totalSharesAndLoot)
   return fairShare
+}
+
+/**
+ * returns remaining available delegates
+ * @param member 
+ * @returns 
+ */
+export function getRemainingDelegates(): u32 {
+  if(memberDelegations.contains(predecessor())){
+    let count = memberDelegations.getSome(predecessor()).size
+    return MAX_DELEGATION_LIMIT - count
+  } else {
+    return MAX_DELEGATION_LIMIT
+  }
 }
 
 
@@ -2252,6 +2286,10 @@ function _submitProposal(
   let newVote = new PersistentMap<u32, string>('uv' + predecessor())
   newVote.set(proposalId, '')
   accountVotes.set(predecessor(), newVote)
+
+  if(flags[6]){
+    memberProposals.set(applicant, 'yes')
+  }
   
   return true
 }
@@ -2318,13 +2356,29 @@ export function sponsorProposal(
     }
 
     // compute starting period for proposal
-    let max = _max(
-      getCurrentPeriod(), 
-      proposals.size == 0 ? 0 : proposals.size == 1 ? proposals.getSome(proposalId).startingPeriod : proposals.getSome(proposalId - 1).startingPeriod
-    )
-    let startingPeriod = max + 1
-    let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength')
-    let gracePeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') + storage.getSome<i32>('gracePeriodLength')
+    let comparison: u64 = 0
+    if(proposals.size == 0){
+      comparison = 0
+    }
+    if(proposals.size == 1){
+      let exists = proposals.containsKey(proposalId)
+      if(exists){
+        let prevProposalStartTime = proposals.getSome(proposalId)
+        comparison = prevProposalStartTime.startingPeriod
+      }
+    }
+    if(proposals.size > 1){
+      let exists = proposals.containsKey(proposalId-1)
+      if(exists){
+        let prevProposalStartTime = proposals.getSome(proposalId-1)
+        comparison = prevProposalStartTime.startingPeriod
+      }
+    }
+    
+    let max = _max(getCurrentPeriod(), comparison)
+    let startingPeriod = (max + 1) as u64
+    let votingPeriod = startingPeriod + (storage.getSome<i32>('votingPeriodLength') as u64 * storage.getSome<i32>('periodDuration') as u64 * 1000000000)
+    let gracePeriod = votingPeriod + (storage.getSome<i32>('gracePeriodLength') as u64 * storage.getSome<i32>('periodDuration') as u64 * 1000000000)
 
     let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
 
@@ -2462,7 +2516,7 @@ export function processProposal(proposalId: u32): bool {
   } else {
     _proposalFailed(proposal)
   }
- 
+
   _returnDeposit(proposal.sponsor)
   _returnDeposit(proposal.proposer)
 
@@ -2543,20 +2597,19 @@ function processGuildKickProposal(proposalId: u32): void {
     let member = members.getSome(proposal.applicant)
 
     // reverse any existing share delegations
-    let allDelegations = memberDelegations.getSome(proposal.applicant)
-    let i: u32 = 0
-    let size = allDelegations.size
-    while (i < size) {
-      let dKey = allDelegations.min()
-      let delegation = allDelegations.getSome(dKey)
+    let allThisMembersDelegations = memberDelegations.getSome(proposal.applicant)
+     let i: u32 = 0
+     while (i < allThisMembersDelegations.size) {
+      let dKey = allThisMembersDelegations.min()
+      let delegation = allThisMembersDelegations.getSome(dKey)
       let delegatedOwner = members.getSome(delegation.delegatedTo) // get original owner to give delegations back to
       delegatedOwner.delegatedShares = u128.sub(delegatedOwner.delegatedShares, delegation.shares) // reduce delegated shares by amount that was delegated
       members.set(delegatedOwner.delegateKey, delegatedOwner) // update delegated member
-      allDelegations.delete(dKey)
+      allThisMembersDelegations.delete(dKey)
       i++
     }
 
-    memberDelegations.set(proposal.applicant, allDelegations) // update kicked member's delegation tracking
+    memberDelegations.set(proposal.applicant, allThisMembersDelegations) // update kicked member's delegation tracking
 
     let updateMember = new Member(
       member.delegateKey,
@@ -2636,7 +2689,7 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
     // check for last member and make donation if applicable
     let numberOfMembers = getTotalMembers()
 
-    if(u128.ne(numberOfMembers, u128.from(1))){
+    if(u128.ne(numberOfMembers, u128.from(1)) && u128.gt(u128.sub(fairShare, share), u128.Zero)){
       makeDonation(contractId, accountId, depositToken, u128.sub(fairShare, share))
     }
 
@@ -2650,25 +2703,10 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
     let newTotalLoot = u128.sub(currentTotalLoot, member.loot)
     storage.set<u128>('totalLoot', newTotalLoot)
 
-    // remove share delegations
-    if(memberDelegations.contains(predecessor())){
-       // reverse any existing share delegations
-      let allDelegations = memberDelegations.getSome(predecessor())
-      let i: u32 = 0
-      let size = allDelegations.size
-      while (i < size) {
-        let dKey = allDelegations.min()
-        let delegation = allDelegations.getSome(dKey)
-        let delegatedMember = members.getSome(delegation.delegatedTo) // get original owner to give delegations back to
-        delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, delegation.shares) // reduce delegated shares by amount that was delegated
-        members.set(delegation.delegatedTo, delegatedMember) // update delegated member
-        allDelegations.delete(dKey)
-        i++
-      }
-    
+    assert(_undelegateAll(predecessor()), 'problem restoring vote delegations')
+   
     // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info
     memberDelegations.delete(predecessor())
-    }
       
     // delete member
     members.delete(accountId)
@@ -2702,10 +2740,26 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
   //obtain predecessor()'s map of vectors of existing delegations or start a new one
   if(memberDelegations.contains(predecessor())){
     let existingDelegations = memberDelegations.getSome(predecessor())
-    let newDelegation = new DelegationInfo(delegateTo, quantity)
-    existingDelegations.set(delegateTo, newDelegation)
+    // check for max delegation limit
+    assert(existingDelegations.size < MAX_DELEGATION_LIMIT, 'max delegation limit hit')
+    let delegateeInfo = existingDelegations.get(delegateTo)
+    if(delegateeInfo != null){
+      let newDelegation = new DelegationInfo(delegateTo, u128.add(delegateeInfo.shares, quantity))
+      existingDelegations.set(delegateTo, newDelegation)
+    } else {
+      let newDelegation = new DelegationInfo(delegateTo, quantity)
+      existingDelegations.set(delegateTo, newDelegation)
+    }
     memberDelegations.set(predecessor(), existingDelegations)
 
+    let existingReceivedDelegations = receivedDelegations.getSome(delegateTo)
+    if(u128.gt(existingReceivedDelegations.getSome(predecessor()), u128.Zero)){
+      let currentShares = existingReceivedDelegations.getSome(predecessor())
+      existingReceivedDelegations.set(predecessor(), u128.add(currentShares, quantity))
+    }
+    receivedDelegations.set(delegateTo, existingReceivedDelegations)
+
+    
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
     members.set(predecessor(), member)
@@ -2716,11 +2770,11 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
     members.set(delegateTo, delegate)
     
   } else {
-    let existingDelegations = new AVLTree<string, DelegationInfo>('ed')
+    let existingDelegations = new AVLTree<string, DelegationInfo>('ed'+predecessor())
     let newDelegation = new DelegationInfo(delegateTo, quantity)
     existingDelegations.set(delegateTo, newDelegation)
     memberDelegations.set(predecessor(), existingDelegations)
-
+  
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
     members.set(predecessor(), member)
@@ -2765,6 +2819,59 @@ export function undelegate(delegateFrom: string, quantity: u128): boolean {
   
   return true
 }
+
+
+/**
+ * Undelegate - function that lets a member take back all the votes they had previously delegated
+ * to another member
+ * @param delegateFrom
+ * @param quantity
+*/
+function _undelegateAll(currentAccount: AccountId): boolean {
+  assertValidId(currentAccount)
+
+  // get user's current received delegations
+  if(receivedDelegations.contains(currentAccount)){
+  let currentUserReceivedDelegations = receivedDelegations.getSome(currentAccount)
+  
+  let i:u32 = 0
+  let rSize = currentUserReceivedDelegations.size
+  while (i < rSize){
+    //get account and amount delegated to it to return to owner
+    let firstKey = currentUserReceivedDelegations.min()
+    let shares = currentUserReceivedDelegations.getSome(firstKey)
+    let member = members.getSome(firstKey)
+    member.delegatedShares = u128.sub(member.delegatedShares, shares)
+    members.set(firstKey, member)
+    currentUserReceivedDelegations.delete(firstKey)
+    i++
+  }
+
+  // delete received delegations from this user from everyone else
+  // first, find out who this account delegated to
+
+  let delegations = memberDelegations.getSome(currentAccount)
+  assert(delegations.size > 0, 'member has no delegations')
+ 
+  let j:u32 = 0
+  let dSize = delegations.size
+  while ( j < dSize){
+   //get account of first key
+   let firstKey = delegations.min()
+  let member = members.getSome(firstKey)
+  let shares = delegations.getSome(firstKey).shares
+  member.receivedDelegations = u128.sub(member.receivedDelegations, shares)
+  members.set(firstKey, member)
+  delegations.delete(firstKey)
+  memberDelegations.set(currentAccount, delegations)
+  j++
+  }
+
+  return true
+  }
+  return false
+}
+
 
 
 
