@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -1004,35 +1004,24 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): bool {
         
         assert(TokenClass.hasBalanceFor(GUILD, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
         if(u128.gt(platformPayment, u128.Zero)){
-          logging.log('here 0')
-          logging.log('platformAccount' + platformAccount)
-          logging.log('platformPayment' + platformPayment.toString())
           let depositToken = storage.getSome<string>('depositToken')
           let platformTransfer = _sTRaw(platformPayment, depositToken, platformAccount)
-          logging.log('platformtransfer: ' + platformTransfer.toString())
         }
-        logging.log('here 1')
+    
         let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
 
         if(transferred) {
-          logging.log('here 2')
           TokenClass.subtractFromGuild(proposal.paymentToken, proposal.paymentRequested)
         }
       } else {
-        logging.log('here 3')
+    
         // is related to a funding commitment - take from ESCROW
         assert(TokenClass.hasBalanceFor(ESCROW, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
         if(u128.gt(platformPayment, u128.Zero)){
-          logging.log('here 4')
-          logging.log('platformAccount' + platformAccount)
-          logging.log('platformPayment' + platformPayment.toString())
           let depositToken = storage.getSome<string>('depositToken')
           let platformTransfer = _sTRaw(platformPayment, depositToken, platformAccount)
-          logging.log('platformtransfer: ' + platformTransfer.toString())
-          logging.log('here 5')
         }
         let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
-        logging.log('here 6')
         if(transferred) {
           TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
         }
@@ -1082,7 +1071,6 @@ function _proposalFailed(proposal: Proposal): bool {
  * @param account
 */
 function _nearTransfer(amount: u128, account: AccountId): bool {
-  logging.log('near transfer :' + account)
   let promise = ContractPromiseBatch.create(account)
   .transfer(amount)
   return true
@@ -1096,7 +1084,6 @@ function _nearTransfer(amount: u128, account: AccountId): bool {
  * @param account (where it's being transferred to)
 */
 function _sTRaw(amount: u128, token: AccountId, account: AccountId): bool {
-  logging.log('transfer account: ' + account)
   assertValidId(account)
 
   // NEAR transfers
@@ -2776,7 +2763,7 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
   //get current number of shares of person attempting to delegate
   let member = members.getSome(predecessor())
   assert(u128.ge(member.shares, quantity), 'member does not have enough shares to delegate')
-  logging.log('bhere 0')
+ 
   //obtain predecessor()'s map of vectors of existing delegations or start a new one
   if(memberDelegations.contains(predecessor())){
     let existingDelegations = memberDelegations.getSome(predecessor())
@@ -2784,63 +2771,49 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
     assert(existingDelegations.size < MAX_DELEGATION_LIMIT, 'max delegation limit hit')
     let delegateeInfo = existingDelegations.get(delegateTo)
     if(delegateeInfo != null){
-      logging.log('bhere 1')
       let newDelegation = new DelegationInfo(delegateTo, u128.add(delegateeInfo.shares, quantity))
       existingDelegations.set(delegateTo, newDelegation)
     } else {
-      logging.log('bhere 2')
       let newDelegation = new DelegationInfo(delegateTo, quantity)
       existingDelegations.set(delegateTo, newDelegation)
     }
     memberDelegations.set(predecessor(), existingDelegations)
 
     if(receivedDelegations.contains(delegateTo)){
-      logging.log('bhere 3')
       let existingReceivedDelegations = receivedDelegations.getSome(delegateTo)
-      logging.log('bhere 4')
       let currentShares = existingReceivedDelegations.getSome(predecessor())
       existingReceivedDelegations.set(predecessor(), u128.add(currentShares, quantity))
       receivedDelegations.set(delegateTo, existingReceivedDelegations)
     } else {
-      logging.log('bhere 5')
       let newReceivedDelegations = new AVLTree<AccountId, u128>('rdg'+delegateTo)
       newReceivedDelegations.set(predecessor(), quantity)
       receivedDelegations.set(delegateTo, newReceivedDelegations)
     }
-    logging.log('bhere 6')
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
-    logging.log('delegating member' + predecessor().toString())
-    logging.log('delegated shares' + (member.delegatedShares).toString())
     members.set(predecessor(), member)
 
     // add quantity shares to the member receivedDelegations - tracks shares delegated to a member
     let delegate = members.getSome(delegateTo)
     delegate.receivedDelegations = u128.add(delegate.receivedDelegations, quantity)
-    logging.log('receiving member: ' + delegateTo.toString())
-    logging.log('received delegations: ' + (delegate.receivedDelegations).toString())
     members.set(delegateTo, delegate)
     
   } else {
-    logging.log('bhere 7')
     let existingDelegations = new AVLTree<string, DelegationInfo>('ed'+predecessor())
     let newDelegation = new DelegationInfo(delegateTo, quantity)
     existingDelegations.set(delegateTo, newDelegation)
     memberDelegations.set(predecessor(), existingDelegations)
-    logging.log('bhere 8')
     let newReceivedDelegations = new AVLTree<AccountId, u128>('rdg'+delegateTo)
     newReceivedDelegations.set(predecessor(), quantity)
     receivedDelegations.set(delegateTo, newReceivedDelegations)
-    logging.log('bhere 9')
     // add quantity shares to member's delegatedShares - used to reduce member's voting power 
     member.delegatedShares = u128.add(member.delegatedShares, quantity)
     members.set(predecessor(), member)
-    logging.log('bhere 10')
+   
     // add quantity shares to the member receivedDelegations - tracks shares delegated to a member
     let delegate = members.getSome(delegateTo)
     delegate.receivedDelegations = u128.add(delegate.receivedDelegations, quantity)
     members.set(delegateTo, delegate)
-    logging.log('bhere 11')
   }
 
  return true
@@ -2859,57 +2832,38 @@ export function undelegate(delegateFrom: string, quantity: u128): boolean {
 
   // get user's current delegations
   if(memberDelegations.contains(predecessor())){
-    logging.log('chere 0')
     let delegations = memberDelegations.getSome(predecessor())
     let delegatedTo = delegations.getSome(delegateFrom)
     assert(u128.gt(delegatedTo.shares, u128.Zero), 'member has no delegations')
     assert(u128.le(quantity, delegatedTo.shares), 'not enough shares delegated, lower quantity')
     let member = members.getSome(predecessor())
-    logging.log('chere 1')
     member.delegatedShares = u128.sub(member.delegatedShares, quantity)
-    logging.log('chere 2')
     members.set(predecessor(), member)
 
     delegatedTo.shares = u128.sub(delegatedTo.shares, quantity)
-    logging.log('chere 3')
-    logging.log('delegatedto.shares' + (delegatedTo.shares).toString())
+   
     delegations.set(delegateFrom, delegatedTo)
-    logging.log('chere 3.2.0')
-    logging.log('chere 3.2.1')
+    
     if(delegations && delegations.size > 0){
-      logging.log('chere 3.2.2')
       memberDelegations.set(predecessor(), delegations)
     } else {
-      logging.log('chere 3.2.3')
       memberDelegations.delete(predecessor())
     }
-    logging.log('chere 4')
     let delegatedMember = members.getSome(delegateFrom)
-    logging.log('chere 5')
     delegatedMember.receivedDelegations = u128.sub(delegatedMember.receivedDelegations, quantity)
-    logging.log('chere 6')
-    logging.log('delegatedmember.receiveddelegations' + (delegatedMember.receivedDelegations).toString())
     members.set(delegateFrom, delegatedMember)
   }
 
   if(receivedDelegations.contains(delegateFrom)){
-    logging.log('chere 7')
     let received = receivedDelegations.getSome(delegateFrom)
     let thisReceived = received.getSome(predecessor())
-    logging.log('chere 8')
-    logging.log('thisreceived :' + thisReceived.toString())
-    logging.log('quantity :' + quantity.toString())
     let newQuantity = u128.sub(thisReceived, quantity)
     received.set(predecessor(), newQuantity)
-    logging.log('chere 4.2.1')
     if(received && received.size > 0){
-      logging.log('chere 4.2.2')
       receivedDelegations.set(delegateFrom, received)
     } else {
-      logging.log('chere 4.2.3')
       receivedDelegations.delete(delegateFrom)
     }
-    logging.log('chere 9')
   }
   
   return true
@@ -2927,7 +2881,6 @@ function _undelegateAll(currentAccount: AccountId): boolean {
 
   // get user's current received delegations
   if(!receivedDelegations.contains(currentAccount)){
-    logging.log('ahere 0')
     // are no delegations so exit
     return true
   } else {
@@ -2935,25 +2888,16 @@ function _undelegateAll(currentAccount: AccountId): boolean {
   let min = currentUserReceivedDelegations.min()
   let max = currentUserReceivedDelegations.max()
   let entries = currentUserReceivedDelegations.keys(min, max, true)
-  logging.log('ahere 1')
   let i = 0
   while (i < entries.length){
-    logging.log('ahere 1')
-    logging.log('entry : ' + entries[i])
     //get account and amount delegated to it to return to owner
       let shares = currentUserReceivedDelegations.getSome(entries[i])
-      logging.log('received shares' + shares.toString())
-      logging.log('current account' + currentAccount.toString())
       let member = members.getSome(currentAccount)
-      logging.log('current account received dels' + (member.receivedDelegations).toString())
       member.receivedDelegations = u128.sub(member.receivedDelegations, shares)
-      logging.log('ahere 3')
       members.set(currentAccount, member)
       let receivedFrom = members.getSome(entries[i])
       receivedFrom.delegatedShares = u128.sub(receivedFrom.delegatedShares, shares)
-      logging.log('receivedfrom delegated shares' + (receivedFrom.delegatedShares).toString())
       members.set(entries[i], receivedFrom)
-      logging.log('ahere 3.1')
       i++
     }
     receivedDelegations.delete(currentAccount)
@@ -2961,7 +2905,6 @@ function _undelegateAll(currentAccount: AccountId): boolean {
 
   // delete received delegations from this user from everyone else
   // first, find out who this account delegated to
-  logging.log('here 4')
   if(memberDelegations.contains(currentAccount)){
     let delegations = memberDelegations.getSome(currentAccount)
     if(delegations.size == 0){
@@ -2973,17 +2916,13 @@ function _undelegateAll(currentAccount: AccountId): boolean {
     let entries = delegations.keys(min, max, true)
     let j = 0
     while (j < entries.length){
-      logging.log('here 4')
-      logging.log('entry : ' + entries[j])
       let member = members.getSome(currentAccount)
       let shares = delegations.getSome(entries[j]).shares
-      logging.log('delegated shares' + shares.toString())
       member.delegatedShares = u128.sub(member.delegatedShares, shares)
       members.set(currentAccount, member)
       let delegated = members.getSome(entries[j])
       delegated.receivedDelegations = u128.sub(delegated.receivedDelegations, shares)
       members.set(entries[j], delegated)
-      logging.log('ahere 6')
       j++
     }
     memberDelegations.delete(currentAccount)
