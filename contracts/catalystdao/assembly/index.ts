@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -46,7 +46,8 @@ import {
   accountVotes,
   affiliations,
   affiliationProposals,
-  receivedDelegations
+  receivedDelegations,
+  tokenBalances
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
@@ -204,7 +205,7 @@ export function init(
   assert(u128.le(_shares, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
   assertValidId(_contractId)
   assertValidId(_platformAccount)
-  assert(u128.eq(Context.attachedDeposit, _contribution), 'attached deposit must match shares')
+  assert(u128.ge(Context.attachedDeposit, _contribution), 'attached deposit must match shares')
  
   depositToken = _approvedTokens[0]
   storage.set<string>('depositToken', depositToken)
@@ -475,13 +476,30 @@ function _fairShare(balance: u128, shares: u128, totalShares: u128): u128 {
 function _votingPeriodPassed(proposal: Proposal): bool {
   
   // check that we've finished the voting/grace periods so it's ready for processing
-  let firstAdd = proposal.startingPeriod + storage.getSome<i32>('votingPeriodLength') 
-  assert(getCurrentPeriod() >= (firstAdd + storage.getSome<i32>('gracePeriodLength')), ERR_NOT_READY)
+  //let firstAdd = proposal.startingPeriod + storage.getSome<i32>('votingPeriodLength') 
+  //assert(getCurrentPeriod() >= (firstAdd + storage.getSome<i32>('gracePeriodLength')), ERR_NOT_READY)
+  assert(getCurrentPeriod() > (proposal.gracePeriod + storage.getSome<i32>('gracePeriodLength')), ERR_NOT_READY)
   
   // check to confirm it hasn't already been processed
   assert(proposal.flags[1] == false, ERR_PROPOSAL_PROCESSED)
  
   return true
+}
+
+/**
+ * Function to determine if we can bypass the rest of the voting period because threshold is met
+ * @param proposal 
+ * @returns 
+ */
+function _bypass(proposal: Proposal): bool {
+  // check to see if we can speed up a failure vote by seeing if there is any chance number of outstanding votes exceeds no votes already cast
+  let totalShares = storage.getSome<u128>('totalShares')
+  let requiredVotes = getNeededVotes()
+  if(u128.lt(u128.sub(totalShares, proposal.noVotes), requiredVotes)){
+    return false
+  } else {
+    return true
+  }
 }
 
 
@@ -500,12 +518,6 @@ function _didPass(proposal: Proposal): bool {
   let achieved = u128.muldiv(totalVotes, u128.from('100'), totalShares)
   let didPass = proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)
   
-  // check to see if we can speed up a failure vote by seeing if there is any chance number of outstanding votes exceeds no votes already cast
-  let requiredVotes = getNeededVotes()
-  if(u128.lt(u128.sub(totalShares, proposal.noVotes), requiredVotes)){
-    didPass = false
-  }
-
   // Make the proposal fail if the dilutionBound is exceeded 
   if(u128.lt(u128.mul(u128.add(totalShares, totalLoot), u128.from(storage.getSome<i32>('dilutionBound'))), u128.from(proposal.maxTotalSharesAndLootAtYesVote))) {
     didPass = false
@@ -722,7 +734,7 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
   assertValidId(contractId)
   assertValidId(contributor)
   assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
-  assert(u128.eq(Context.attachedDeposit, amount), 'attached deposit must match donation amount')
+  assert(u128.ge(Context.attachedDeposit, amount), 'attached deposit must match donation amount')
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
   let donationId = contributions.size
@@ -1201,10 +1213,9 @@ export function getSummonTime(): u64 {
 export function getNeededVotes(): u128 {
   let voteThreshold = u128.from(storage.getSome<i32>('voteThreshold'))
   let totalShares = storage.getSome<u128>('totalShares')
-  let neededVotes = u128.mul(totalShares, u128.div(voteThreshold, u128.from('100')))
+  let neededVotes = u128.muldiv(totalShares, voteThreshold, u128.from('100'))
   return neededVotes
 }
-
 
 /**
  * returns deposit token type
@@ -1523,7 +1534,7 @@ export function submitMemberProposal (
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let totalAmount = u128.add(proposalDeposit, tributeOffered)
-  assert(u128.eq(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
 
   let transferred = _sTRaw(totalAmount, tributeToken, contractId)
 
@@ -1591,7 +1602,7 @@ if(members.contains(affiliateWith)) {
 // Funds transfers
 let proposalDeposit = storage.getSome<u128>('proposalDeposit')
 let totalAmount = u128.add(proposalDeposit, affiliationFee)
-assert(u128.eq(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
+assert(u128.ge(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
 
 let transferred = _sTRaw(totalAmount, affiliationToken, contractId)
 
@@ -1654,7 +1665,7 @@ if(members.contains(applicant)) {
 // Funds transfers
 let proposalDeposit = storage.getSome<u128>('proposalDeposit')
 let depositToken = storage.getSome<string>('depositToken')
-assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
 let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
@@ -1716,7 +1727,7 @@ if(u128.gt(tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, tributeTo
 // Funds transfers
 let proposalDeposit = storage.getSome<u128>('proposalDeposit')
 let totalContribution = u128.add(proposalDeposit, tributeOffered)
-assert(u128.eq(Context.attachedDeposit, totalContribution), 'attached deposit not correct')
+assert(u128.ge(Context.attachedDeposit, totalContribution), 'attached deposit not correct')
 
 let transferred = _sTRaw(totalContribution, tributeToken, contractId)
 
@@ -1778,7 +1789,7 @@ export function submitCommitmentProposal(
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -1828,7 +1839,7 @@ export function submitConfigurationProposal(
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -1881,7 +1892,7 @@ export function submitOpportunityProposal(
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -1936,7 +1947,7 @@ export function submitGuildKickProposal(
     // Funds transfers
     let proposalDeposit = storage.getSome<u128>('proposalDeposit')
     let depositToken = storage.getSome<string>('depositToken')
-    assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
     let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
@@ -1982,7 +1993,7 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
 
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -2044,7 +2055,7 @@ export function submitCommunityRoleProposal(
   // Funds transfers (Proposal Deposit)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -2120,7 +2131,7 @@ export function submitAssignRoleProposal(
   // Funds transfers (Proposal Deposit)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -2194,7 +2205,7 @@ export function submitReputationFactorProposal(
   // Funds transfers (Proposal Deposit)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
@@ -2342,7 +2353,7 @@ export function sponsorProposal(
   // collect proposal deposit from sponsor and store it in the contract until the proposal is processed
   // Funds transfers
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  assert(u128.eq(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
@@ -2400,9 +2411,11 @@ export function sponsorProposal(
     }
     
     let max = _max(getCurrentPeriod(), comparison)
-    let startingPeriod = (max + 1) as u64
-    let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') as u64 
-    let gracePeriod = votingPeriod + storage.getSome<i32>('gracePeriodLength') as u64 
+    let startingPeriod = (max) as u64
+    // let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') as u64 
+    // let gracePeriod = votingPeriod + storage.getSome<i32>('gracePeriodLength') as u64 
+    let votingPeriod = startingPeriod // voting starts immediately after being sponsored
+    let gracePeriod = (votingPeriod + storage.getSome<i32>('votingPeriodLength')) as u64 // start of voting period plus its length
 
     let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
 
@@ -2489,10 +2502,9 @@ export function submitVote(proposalId: u32, vote: string): bool {
   // if total vote after this vote is processed either for or against satisfies voting decision for pass/fail, then push proposal into
   // grace period.  Prevents a proposal from sitting in voting longer than necessary when the vote has already been decided.
   let updatedProposal = proposals.getSome(proposalId)
-  let voteDecided = _didPass(updatedProposal)
+  let voteDecided = _bypass(updatedProposal)
   if(voteDecided){
-    updatedProposal.votingPeriod = getCurrentPeriod()
-    updatedProposal.gracePeriod = getCurrentPeriod() + storage.getSome<i32>('gracePeriodLength')
+    updatedProposal.gracePeriod = getCurrentPeriod()
     updatedProposal.voteFinalized = Context.blockTimestamp
     proposals.set(updatedProposal.proposalId, updatedProposal)
   }
@@ -2684,64 +2696,58 @@ function processGuildKickProposal(proposalId: u32): void {
  * @param remainingBalance
  * @param appOwner
 */
-export function leave(contractId: AccountId, accountId: AccountId, share: u128, remainingBalance: u128, appOwner: AccountId): boolean {
+export function leave(contractId: AccountId, accountId: AccountId, share: u128, availableBalance: u128, appOwner: AccountId): boolean {
   assertValidId(accountId)
   assertValidId(appOwner)
  
   assert(accountId == predecessor(), 'only the account owner can leave the community')
  
   let depositToken = storage.getSome<string>('depositToken')
- 
-  let fairShare = getCurrentShare(accountId)
-  assert(u128.le(share, fairShare), 'asking to withdraw more than fair share of the fund')
-
-  //retrieve member
-  let member = members.getSome(accountId)
-
-  // transfer user's fairShare back to them
-  let withdrawn = _sTRaw(share, depositToken, accountId)
-
-  // transfer remaining contract balance (less fairshare already sent) to app owner
-  // use _sTRaw as remaining will be in yocto
   
-  let remaining = u128.sub(remainingBalance, share)
-  let transfer = _sTRaw(remaining, depositToken, appOwner)
-
-  if(withdrawn && transfer) {
-    TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
-
-    // check for last member and make donation if applicable
-    let numberOfMembers = getTotalMembers()
-
-    if(u128.ne(numberOfMembers, u128.from(1)) && u128.gt(u128.sub(fairShare, share), u128.Zero)){
+  let totalMembers = getTotalMembers()
+  
+  if(u128.eq(totalMembers, u128.from('1'))){
+    // if last member, transfer remaining available contract balance to last member
+    // use _sTRaw as remaining will be in yocto
+    let transfer = _sTRaw(availableBalance, depositToken, accountId)
+  } else {
+    let fairShare = getCurrentShare(accountId)
+    assert(u128.le(share, fairShare), 'asking to withdraw more than fair share of the fund')
+    // transfer user's fairShare back to them
+    let withdrawn = _sTRaw(share, depositToken, accountId)
+    if(withdrawn) {
+      TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
+    }
+    // make donation if applicable
+    if(u128.gt(u128.sub(fairShare, share), u128.Zero)){
       makeDonation(contractId, accountId, depositToken, u128.sub(fairShare, share))
     }
-
-    // remove shares from total shares
-    let currentTotalShares = storage.getSome<u128>('totalShares')
-    let newTotalShares = u128.sub(currentTotalShares, member.shares)
-    storage.set<u128>('totalShares', newTotalShares)
-
-    // remove loot from total loot
-    let currentTotalLoot = storage.getSome<u128>('totalLoot')
-    let newTotalLoot = u128.sub(currentTotalLoot, member.loot)
-    storage.set<u128>('totalLoot', newTotalLoot)
-
-    assert(_undelegateAll(predecessor()), 'problem restoring vote delegations')
-   
-    // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info if it exists
-    if(memberDelegations.contains(predecessor())){
-      memberDelegations.delete(predecessor())
-    }
-    // delete member
-    members.delete(accountId)
-    let totalMembers = getTotalMembers()
-    storage.set<u128>('totalMembers', u128.sub(totalMembers, u128.from('1')))
-    
-    return true
-  } else {
-    return false
   }
+
+  //retrieve member and make necessary changes
+  let member = members.getSome(accountId)
+
+  // remove shares from total shares
+  let currentTotalShares = storage.getSome<u128>('totalShares')
+  let newTotalShares = u128.sub(currentTotalShares, member.shares)
+  storage.set<u128>('totalShares', newTotalShares)
+
+  // remove loot from total loot
+  let currentTotalLoot = storage.getSome<u128>('totalLoot')
+  let newTotalLoot = u128.sub(currentTotalLoot, member.loot)
+  storage.set<u128>('totalLoot', newTotalLoot)
+
+  assert(_undelegateAll(predecessor()), 'problem restoring vote delegations')
+  
+  // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info if it exists
+  if(memberDelegations.contains(predecessor())){
+    memberDelegations.delete(predecessor())
+  }
+  // delete member
+  members.delete(accountId)
+  storage.set<u128>('totalMembers', u128.sub(totalMembers, u128.from('1')))
+    
+  return true
 }
 
 

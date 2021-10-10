@@ -3,21 +3,32 @@ import { DaoModel } from './model';
 
 const CODE = includeBytes('../../../build/release/catalystdao.wasm')
 
-//const CODE_KEY = "CODE";
+// const CODE_KEY = "CODE";
+// const CODE_KEY_LEN = String.UTF8.byteLength(CODE_KEY);
+// const CODE_KEY_PTR = <u64>changetype<usize>(CODE_KEY);
 
-//const OWNER_KEY = "OWNER";
+// const OWNER_KEY = "OWNER";
+
+// function assertOwner(): void {
+//   assert(Context.sender == storage.getString(OWNER_KEY), "Only owner can set binary");
+// }
 
 
-// export function init(ownerId: string): void {
+// function _init(ownerId: string): void {
 //   assert(env.isValidAccountID(ownerId), "Invalid ownerId")
 //   storage.setString(OWNER_KEY, ownerId)
 //   logging.log(`${ownerId} now owner`)
 // }
 
 // export function setBinary(): void {
-//   assert(Context.sender == storage.getString(OWNER_KEY), "Only owner can set binary");
+//   assertOwner();
 //   env.input(10);
-//   env.storage_write(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), U64.MAX_VALUE, 10, 11);
+//   env.storage_write(CODE_KEY_LEN, CODE_KEY_PTR, U64.MAX_VALUE, 10, 11);
+// }
+
+// export function deleteBinary(): void {
+//   assertOwner();
+//   env.storage_remove(CODE_KEY_LEN, CODE_KEY_PTR, 0);
 // }
 
 let daos = new AVLTree<u32, DaoModel>('M')
@@ -42,6 +53,20 @@ export function getDaoIndex(accountId: string): i32 {
   return daoIndex.contains(accountId) ? daoIndex.getSome(accountId) : -1
 }
 
+export function inactivateDAO(contractId: string): boolean {
+  assert(env.isValidAccountID(contractId), 'not a valid account')
+
+   // get DAO's index, ensuring it is in the daos vector
+   let index = getDaoIndex(contractId)
+   assert(index != -1, 'dao does not exist - can not inactivate')
+
+   let thisDao = daos.getSome(index)
+   thisDao.status = 'inactive'
+   daos.set(index, thisDao)
+
+   return true
+}
+
 export function deleteDAO(accountId: string, beneficiary: string): ContractPromiseBatch {
   assert(env.isValidAccountID(accountId), 'not a valid account')
   assert(env.isValidAccountID(beneficiary), 'not a valid beneficiary account')
@@ -61,6 +86,16 @@ export function deleteDAO(accountId: string, beneficiary: string): ContractPromi
   return promise
 }
 
+// export function manualDeleteDao(accountId: string): boolean {
+//    // get DAO's index, ensuring it is in the daos vector
+//    let index = getDaoIndex(accountId)
+//    assert(index != -1, 'dao does not exist - can not delete')
+ 
+//    daos.delete(index)
+//    daoIndex.delete(accountId)
+//    return true
+// }
+
 export function createDAO(
   accountId: string,
   deposit: u128
@@ -72,15 +107,15 @@ export function createDAO(
     .create_account()
     .transfer(Context.attachedDeposit)
   
-  // env.storage_read(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), 10);
-  // env.promise_batch_action_deploy_contract(promise.id, U64.MAX_VALUE, 10); 
-    .deploy_contract(Uint8Array.wrap(changetype<ArrayBuffer>(CODE)))
+    // env.storage_read(String.UTF8.byteLength(CODE_KEY), <u64>changetype<usize>(CODE_KEY), 10);
+    // env.promise_batch_action_deploy_contract(promise.id, U64.MAX_VALUE, 10); 
+     .deploy_contract(Uint8Array.wrap(changetype<ArrayBuffer>(CODE)))
   
   // next index (location to store the new DAO) should be greater than any key in the tree
   let nextIndex = daos.size == 0 ? 0 : daos.max() + 1;
   daoIndex.set(accountId, nextIndex) 
 
-  let newDaoModel = new DaoModel(accountId, Context.blockTimestamp, Context.predecessor)
+  let newDaoModel = new DaoModel(accountId, Context.blockTimestamp, Context.predecessor, 'active')
   daos.set(nextIndex, newDaoModel)
 
   return promise
