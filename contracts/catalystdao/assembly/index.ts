@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -2456,7 +2456,7 @@ export function submitVote(proposalId: u32, vote: string): bool {
   // ensure it's a valid vote and that we are still in the voting period (between start and end times)
   assert(vote == 'yes' || vote=='no', ERR_VOTE_INVALID)
   assert(getCurrentPeriod() >= proposal.startingPeriod, ERR_VOTING_NOT_STARTED)
-  assert(getCurrentPeriod() <= proposal.votingPeriod, ERR_VOTING_PERIOD_EXPIRED)
+  assert(getCurrentPeriod() <= proposal.gracePeriod, ERR_VOTING_PERIOD_EXPIRED)
 
   // check to see if this member has already voted
   let existingVote = getMemberProposalVote(predecessor(), proposalId)
@@ -2504,7 +2504,7 @@ export function submitVote(proposalId: u32, vote: string): bool {
   let updatedProposal = proposals.getSome(proposalId)
   let voteDecided = _bypass(updatedProposal)
   if(voteDecided){
-    updatedProposal.gracePeriod = getCurrentPeriod()
+    updatedProposal.gracePeriod = getCurrentPeriod() // start graceperiod in next period
     updatedProposal.voteFinalized = Context.blockTimestamp
     proposals.set(updatedProposal.proposalId, updatedProposal)
   }
@@ -2723,7 +2723,6 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
       makeDonation(contractId, accountId, depositToken, u128.sub(fairShare, share))
     }
   }
-
   //retrieve member and make necessary changes
   let member = members.getSome(accountId)
 
@@ -2738,7 +2737,6 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
   storage.set<u128>('totalLoot', newTotalLoot)
 
   assert(_undelegateAll(predecessor()), 'problem restoring vote delegations')
-  
   // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info if it exists
   if(memberDelegations.contains(predecessor())){
     memberDelegations.delete(predecessor())
