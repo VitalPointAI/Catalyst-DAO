@@ -493,12 +493,11 @@ function _votingPeriodPassed(proposal: Proposal): bool {
  */
 function _bypass(proposal: Proposal): bool {
   // check to see if we can speed up a failure vote by seeing if there is any chance number of outstanding votes exceeds no votes already cast
-  let totalShares = storage.getSome<u128>('totalShares')
   let requiredVotes = getNeededVotes()
-  if(u128.lt(u128.sub(totalShares, proposal.noVotes), requiredVotes)){
-    return false
-  } else {
+  if(u128.ge(proposal.yesVotes, requiredVotes) || u128.ge(proposal.noVotes, requiredVotes)){
     return true
+  } else {
+    return false
   }
 }
 
