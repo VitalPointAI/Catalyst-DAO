@@ -540,8 +540,17 @@ function _didPass(proposal: Proposal): bool {
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
   if(u128.gt(proposal.paymentRequested, u128.Zero)){
-    if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
+    if(proposal.referenceIds.length == 0){
+      // not related to a funding commitment - check against GUILD
+      if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
       didPass = false
+      }
+    }
+    if(proposal.referenceIds.length > 0){
+      // related to a funding commitment - check against ESCROW
+      if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(ESCROW, proposal.paymentToken)))) {
+        didPass = false
+      }
     }
   }
   
