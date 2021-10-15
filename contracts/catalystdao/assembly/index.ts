@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -510,16 +510,23 @@ function _didPass(proposal: Proposal): bool {
 
   // Threshold voting rule (threshold% of total vote)
   let voteThreshold = u128.from(storage.getSome<i32>('voteThreshold'))
+  logging.log('vote threshold' + voteThreshold.toString())
   let totalShares = storage.getSome<u128>('totalShares')
+  logging.log('totalshares' + totalShares.toString())
   let totalLoot = storage.getSome<u128>('totalLoot')
+  logging.log('totalloot' + totalLoot.toString())
   
   let totalVotes = u128.add(proposal.yesVotes, proposal.noVotes)
+  logging.log('total votes' + totalVotes.toString())
+  u128.muldiv(totalShares, voteThreshold, u128.from('100'))
   let achieved = u128.muldiv(totalVotes, u128.from('100'), totalShares)
+  logging.log('achieved' + achieved.toString())
   let didPass = proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)
-  
+  logging.log('didpass 0' + didPass.toString())
   // Make the proposal fail if the dilutionBound is exceeded 
   if(u128.lt(u128.mul(u128.add(totalShares, totalLoot), u128.from(storage.getSome<i32>('dilutionBound'))), u128.from(proposal.maxTotalSharesAndLootAtYesVote))) {
     didPass = false
+    logging.log('failed here 0')
   }
  
   // Make the proposal fail if the applicant is jailed
@@ -528,6 +535,7 @@ function _didPass(proposal: Proposal): bool {
   if(members.contains(proposal.applicant)) {
     if(members.getSome(proposal.applicant).jailed != 0) {
       didPass = false
+      logging.log('failed here 1')
     }
   }
 
@@ -540,16 +548,37 @@ function _didPass(proposal: Proposal): bool {
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
   if(u128.gt(proposal.paymentRequested, u128.Zero)){
-    if(proposal.referenceIds.length == 0){
-      // not related to a funding commitment - check against GUILD
+    logging.log('in here 0')
+    if(proposal.referenceIds.length == 0 && proposal.flags[11]){
+      // is a payout not related to a funding commitment - check against GUILD
+      logging.log('in here 1')
       if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
       didPass = false
+      logging.log('failed here 2')
       }
     }
-    if(proposal.referenceIds.length > 0){
-      // related to a funding commitment - check against ESCROW
+    if(proposal.referenceIds.length > 0 && proposal.flags[11]){
+      logging.log('in here 2')
+      // is a payout that references a funding commitment - check against ESCROW
       if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(ESCROW, proposal.paymentToken)))) {
         didPass = false
+        logging.log('failed here 3')
+      }
+    }
+    if(proposal.referenceIds.length > 0 && proposal.flags[7]){
+      logging.log('in here 2')
+      // is a funding commitment check against GUILD
+      if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
+        didPass = false
+        logging.log('failed here 3')
+      }
+    }
+    if(!proposal.flags[7] && !proposal.flags[11]){
+      logging.log('in here 2')
+      // is not a funding commitment or payout - check against GUILD
+      if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
+        didPass = false
+        logging.log('failed here 3')
       }
     }
   }
@@ -558,6 +587,7 @@ function _didPass(proposal: Proposal): bool {
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
     didPass = false
+    logging.log('failed here 4')
   }
   
   return didPass
@@ -743,6 +773,38 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
   assertValidId(contributor)
   assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
   assert(u128.ge(Context.attachedDeposit, amount), 'attached deposit must match donation amount')
+  assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
+  
+  let donationId = contributions.size
+
+  let contribution = new Donation()
+  contribution.contributor = contributor
+  contribution.donationId = donationId
+  contribution.donation = amount
+  contribution.contributed = Context.blockTimestamp
+  contributions.set(donationId, contribution)
+  
+  let transferred = _sTRaw(amount, token, contractId)
+
+  if(transferred) {
+    TokenClass.addToGuild(token, amount)
+
+    return true
+  } else {
+    return false
+  }
+}
+
+/**
+ * Internal donation function used with leave community function
+ * @param contractId
+ * @param token
+ * @param amount
+*/
+function _makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
+  assertValidId(contractId)
+  assertValidId(contributor)
+  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
   let donationId = contributions.size
@@ -1549,6 +1611,10 @@ export function submitMemberProposal (
   if(transferred) {
     TokenClass.addToEscrow(predecessor(), tributeToken, tributeOffered)
 
+    if(u128.eq(tributeOffered, u128.Zero)){
+      let depositToken = storage.getSome<string>('depositToken')
+      TokenClass.add(predecessor(), depositToken)
+    }
 
     let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[6] = true // member proposal
@@ -2561,6 +2627,10 @@ export function processProposal(proposalId: u32, platformPayment: u128): bool {
     _proposalFailed(proposal)
   }
 
+  // remove flag indicating a member proposal is in progress
+  if(flags[6]){
+    memberProposals.delete(proposal.applicant)
+  }
   _returnDeposit(proposal.sponsor)
   _returnDeposit(proposal.proposer)
 
@@ -2724,11 +2794,16 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
     // transfer user's fairShare back to them
     let withdrawn = _sTRaw(share, depositToken, accountId)
     if(withdrawn) {
-      TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
+      let balance = TokenClass.get(predecessor(), depositToken)
+      if(u128.gt(balance, u128.Zero)){
+        TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
+      } else {
+        TokenClass.withdrawFromGuildNoBalance(depositToken, share)
+      }
     }
     // make donation if applicable
     if(u128.gt(u128.sub(fairShare, share), u128.Zero)){
-      makeDonation(contractId, accountId, depositToken, u128.sub(fairShare, share))
+      _makeDonation(contractId, accountId, depositToken, u128.sub(fairShare, share))
     }
   }
   //retrieve member and make necessary changes

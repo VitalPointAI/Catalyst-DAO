@@ -1,4 +1,4 @@
-import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap } from 'near-sdk-as'
+import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap, logging } from 'near-sdk-as'
 import { ERR_INSUFFICIENT_BALANCE, ERR_NOT_A_MEMBER, ERR_NOT_DELEGATE } from './dao-error-messages'
 import { AccountId, GUILD, ESCROW, TOTAL } from './dao-types'
 import { isPositive } from './utils'
@@ -66,11 +66,15 @@ export class TokenAccounting {
     private getTokenMap(account: AccountId, token: TokenName, balance: Balance = u128.Zero): PersistentMap<string, u128> {
         let exists = tokenBalances.contains(account)
         if (exists) {
+            logging.log('here 2')
             return tokenBalances.getSome(account)
+
             
         } else {
             let newTokenBalanceMap = new PersistentMap<string, u128>('tb' + account)
+            logging.log('here 3')
             newTokenBalanceMap.set(token, balance)
+            logging.log('here 4')
             return newTokenBalanceMap
         }
     }
@@ -84,7 +88,9 @@ export class TokenAccounting {
 
     sub(account: AccountId, token: TokenName, balance: Balance): void {
         let tokenMap = this.getTokenMap(account, token, balance);
+        logging.log('here 0')
         tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
+        logging.log('here 1')
         tokenBalances.set(account, tokenMap);
     }
 
@@ -129,7 +135,15 @@ export class TokenAccounting {
 
     withdrawFromGuild(account: AccountId, token: TokenName, balance: Balance): void {
         this.sub(GUILD, token, balance);
+        logging.log('here 5')
         this.withdrawFromTotal(account, token, balance);
+    }
+
+    // used when a member joined with no contribution but can leave with a share of fund
+    withdrawFromGuildNoBalance(token: TokenName, balance: Balance): void {
+        this.sub(GUILD, token, balance);
+        logging.log('here 5')
+        this.withdrawFromTotalNoBalance(token, balance);
     }
 
     withdrawFromEscrow(account: AccountId, token: TokenName, balance: Balance): void {
@@ -149,8 +163,14 @@ export class TokenAccounting {
         this.sub(TOTAL, token, balance);
     }
 
-    withdrawFromTotal(account: AccountId, token: TokenName, balance:u128): void {
+    withdrawFromTotal(account: AccountId, token: TokenName, balance: Balance): void {
         this.sub(account, token, balance);
+        logging.log('here 6')
+        this.sub(TOTAL, token, balance);
+        logging.log('here 7')
+    }
+
+    withdrawFromTotalNoBalance(token: TokenName, balance: Balance): void {
         this.sub(TOTAL, token, balance);
     }  
 
