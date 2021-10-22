@@ -1558,8 +1558,8 @@ export function getProposal(proposalId: u32): Proposal {
  * returns delegation information for a given member
 */
 export function getDelegationInfo(member: AccountId, delegatee: AccountId): DelegationInfo {
-  let allMemberDelegations = memberDelegations.getSome(member)
-  return allMemberDelegations.getSome(delegatee)
+    let allMemberDelegations = memberDelegations.getSome(member)
+    return allMemberDelegations.getSome(delegatee)
 }
 
 
@@ -2444,16 +2444,24 @@ export function sponsorProposal(
   
     // Whitelist proposal
     if(proposal.flags[4]) {
-      assert(!tokenWhiteList.getSome(proposal.tributeToken), 'already whitelisted')
-      assert(!proposedToWhiteList.getSome(proposal.tributeToken), 'whitelist proposed already')
-      assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
-      proposedToWhiteList.set(proposal.tributeToken, true)
+      if(tokenWhiteList.contains(proposal.tributeToken)){
+        assert(!tokenWhiteList.getSome(proposal.tributeToken), 'already whitelisted')
+        assert(!proposedToWhiteList.getSome(proposal.tributeToken), 'whitelist proposed already')
+        assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
+        proposedToWhiteList.set(proposal.tributeToken, true)
+      } else {
+        assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
+        proposedToWhiteList.set(proposal.tributeToken, true)
+      }
     }
 
     //Guild Kick Proposal
     if (proposal.flags[5]) {
-      assert(!proposedToKick.getSome(proposal.applicant), 'already proposed to kick')
-      proposedToKick.set(proposal.applicant, true)
+      if(proposedToKick.contains(proposal.applicant)) {
+        assert(!proposedToKick.getSome(proposal.applicant), 'already proposed to kick')
+      } else {
+        proposedToKick.set(proposal.applicant, true)
+      }
     }
 
     // compute starting period for proposal
@@ -2711,20 +2719,22 @@ function processGuildKickProposal(proposalId: u32): void {
     let member = members.getSome(proposal.applicant)
 
     // reverse any existing share delegations
-    let allThisMembersDelegations = memberDelegations.getSome(proposal.applicant)
-     let i: u32 = 0
-     while (i < allThisMembersDelegations.size) {
-      let dKey = allThisMembersDelegations.min()
-      let delegation = allThisMembersDelegations.getSome(dKey)
-      let delegatedOwner = members.getSome(delegation.delegatedTo) // get original owner to give delegations back to
-      delegatedOwner.delegatedShares = u128.sub(delegatedOwner.delegatedShares, delegation.shares) // reduce delegated shares by amount that was delegated
-      members.set(delegatedOwner.delegateKey, delegatedOwner) // update delegated member
-      allThisMembersDelegations.delete(dKey)
-      i++
-    }
+    if(memberDelegations.contains(proposal.applicant)){
+      let allThisMembersDelegations = memberDelegations.getSome(proposal.applicant)
+      let i: u32 = 0
+      while (i < allThisMembersDelegations.size) {
+        let dKey = allThisMembersDelegations.min()
+        let delegation = allThisMembersDelegations.getSome(dKey)
+        let delegatedOwner = members.getSome(delegation.delegatedTo) // get original owner to give delegations back to
+        delegatedOwner.delegatedShares = u128.sub(delegatedOwner.delegatedShares, delegation.shares) // reduce delegated shares by amount that was delegated
+        members.set(delegatedOwner.delegateKey, delegatedOwner) // update delegated member
+        allThisMembersDelegations.delete(dKey)
+        i++
+      }
 
     memberDelegations.set(proposal.applicant, allThisMembersDelegations) // update kicked member's delegation tracking
-
+    }
+    
     let updateMember = new Member(
       member.delegateKey,
       u128.Zero, // revoke all shares
@@ -2820,10 +2830,7 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
   storage.set<u128>('totalLoot', newTotalLoot)
 
   assert(_undelegateAll(predecessor()), 'problem restoring vote delegations')
-  // delegation info is now empty (all delegations returned to owners) - thus delete the delegation info if it exists
-  if(memberDelegations.contains(predecessor())){
-    memberDelegations.delete(predecessor())
-  }
+ 
   // delete member
   members.delete(accountId)
   storage.set<u128>('totalMembers', u128.sub(totalMembers, u128.from('1')))

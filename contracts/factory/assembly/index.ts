@@ -43,6 +43,7 @@ export function getDaoListLength(): u32 {
   return daos.size
 }
 
+
 export function getDaoByAccount(accountId: string): DaoModel {
   const index = getDaoIndex(accountId);
   assert(index != -1, "No dao with this account")
