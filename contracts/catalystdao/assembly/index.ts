@@ -214,11 +214,8 @@ export function init(
     if(_approvedTokens[i] != 'Ⓝ' ){
     assertValidId(_approvedTokens[i])
     }
-    if(tokenWhiteList.contains(_approvedTokens[i])) {
-      assert(!tokenWhiteList.getSome(_approvedTokens[i]), ERR_DUPLICATE_TOKEN)
-    } else {
-      tokenWhiteList.set(_approvedTokens[i], true)
-    }
+    assert(!tokenWhiteList.contains(_approvedTokens[i]), ERR_DUPLICATE_TOKEN)
+    tokenWhiteList.set(_approvedTokens[i], true)
     approvedTokens.push(_approvedTokens[i])
   }
   
@@ -771,7 +768,7 @@ export function cancelProposal(proposalId: u32, tribute: u128, loot: u128): Prop
 export function makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
   assertValidId(contractId)
   assertValidId(contributor)
-  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.get(token, false), ERR_NOT_WHITELISTED)
   assert(u128.ge(Context.attachedDeposit, amount), 'attached deposit must match donation amount')
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
@@ -804,7 +801,7 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
 function _makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
   assertValidId(contractId)
   assertValidId(contributor)
-  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.get(token, false), ERR_NOT_WHITELISTED)
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
   let donationId = contributions.size
@@ -1558,8 +1555,13 @@ export function getProposal(proposalId: u32): Proposal {
  * returns delegation information for a given member
 */
 export function getDelegationInfo(member: AccountId, delegatee: AccountId): DelegationInfo {
-    let allMemberDelegations = memberDelegations.getSome(member)
-    return allMemberDelegations.getSome(delegatee)
+    if(memberDelegations.contains(member)){
+      let allMemberDelegations = memberDelegations.getSome(member)
+      if(allMemberDelegations.has(delegatee)){
+        return allMemberDelegations.getSome(delegatee)
+      }
+    }
+    return new DelegationInfo('', u128.Zero)
 }
 
 
@@ -1587,7 +1589,7 @@ export function submitMemberProposal (
     contractId: AccountId
 ): bool {
   assert(u128.le(u128.add(sharesRequested, lootRequested), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-  assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.get(tributeToken, false), ERR_NOT_WHITELISTED)
   assertValidApplicant(applicant)
   assert(members.get(applicant) == null, 'already a member')
   assert(_memberProposalPresent(applicant) == false, 'member proposal already in progress')
@@ -1660,7 +1662,7 @@ export function submitAffiliationProposal (
   affiliationToken: AccountId,
   contractId: AccountId
 ): bool {
-assert(tokenWhiteList.getSome(affiliationToken), ERR_NOT_WHITELISTED)
+assert(tokenWhiteList.get(affiliationToken, false), ERR_NOT_WHITELISTED)
 assertValidApplicant(affiliateWith)
 
 let allAffiliations = affiliations.getSome(Context.contractName)
@@ -1729,7 +1731,7 @@ export function submitPayoutProposal (
   referenceIds: Array<GenericObject>,
   contractId: AccountId
 ): bool {
-assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+assert(tokenWhiteList.get(paymentToken, false), ERR_NOT_WHITELISTED_PT)
 assertValidApplicant(applicant)
 
 if(members.contains(applicant)) {
@@ -1787,7 +1789,7 @@ export function submitTributeProposal (
   contractId: AccountId
 ): bool {
 assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
+assert(tokenWhiteList.get(tributeToken, false), ERR_NOT_WHITELISTED)
 assertValidApplicant(applicant)
 if(members.contains(applicant)) {
   assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
@@ -1852,7 +1854,7 @@ export function submitCommitmentProposal(
   referenceIds: Array<GenericObject>,
   contractId: AccountId
   ): bool {
-  assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+  assert(tokenWhiteList.get(paymentToken, false), ERR_NOT_WHITELISTED_PT)
   assertValidApplicant(applicant)
   assert(u128.gt(paymentRequested, u128.Zero), 'funding request must be greater than zero')
   
@@ -2062,7 +2064,7 @@ export function submitGuildKickProposal(
 */
 export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToken: AccountId, contractId: AccountId): bool {
   assertValidId(tokenToWhitelist)
-  assert(!tokenWhiteList.getSome(tokenToWhitelist), ERR_ALREADY_WHITELISTED)
+  assert(!tokenWhiteList.get(tokenToWhitelist, false), ERR_ALREADY_WHITELISTED)
   assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_WHITELISTED)
 
   // Funds transfers
@@ -2444,24 +2446,18 @@ export function sponsorProposal(
   
     // Whitelist proposal
     if(proposal.flags[4]) {
-      if(tokenWhiteList.contains(proposal.tributeToken)){
-        assert(!tokenWhiteList.getSome(proposal.tributeToken), 'already whitelisted')
-        assert(!proposedToWhiteList.getSome(proposal.tributeToken), 'whitelist proposed already')
+        assert(!tokenWhiteList.get(proposal.tributeToken, false), 'already whitelisted')
+        assert(!proposedToWhiteList.get(proposal.tributeToken, false), 'whitelist proposed already')
         assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
         proposedToWhiteList.set(proposal.tributeToken, true)
-      } else {
-        assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
-        proposedToWhiteList.set(proposal.tributeToken, true)
-      }
     }
 
     //Guild Kick Proposal
     if (proposal.flags[5]) {
       if(proposedToKick.contains(proposal.applicant)) {
         assert(!proposedToKick.getSome(proposal.applicant), 'already proposed to kick')
-      } else {
-        proposedToKick.set(proposal.applicant, true)
       }
+      proposedToKick.set(proposal.applicant, true)
     }
 
     // compute starting period for proposal
@@ -3042,8 +3038,14 @@ export function updateDelegateKey(newDelegateKey: AccountId): bool {
   assertValidId(newDelegateKey)
 
   if(newDelegateKey != predecessor()) {
-    assert(!members.getSome(newDelegateKey).existing, ERR_NO_OVERWRITE_MEMBER)
-    assert(!members.getSome(memberAddressByDelegatekey.getSome(newDelegateKey)).existing, ERR_NO_OVERWRITE_KEY)
+    if(members.contains(newDelegateKey)){
+      assert(!members.getSome(newDelegateKey).existing, ERR_NO_OVERWRITE_MEMBER)
+    }
+    if(memberAddressByDelegatekey.contains(newDelegateKey)){
+      if(members.contains(memberAddressByDelegatekey.getSome(newDelegateKey))){
+        assert(!members.getSome(memberAddressByDelegatekey.getSome(newDelegateKey)).existing, ERR_NO_OVERWRITE_KEY)
+      }
+    }
   }
 
   let member = members.getSome(predecessor())
