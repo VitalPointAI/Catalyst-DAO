@@ -37,11 +37,11 @@ export const memberRepFactors = new PersistentUnorderedMap<AccountId, AVLTree<Re
 /** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
 export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, reputationFactor>>('crf') 
 /** maps token name to whether it is whitelisted or not */
-export const tokenWhiteList = new PersistentMap<string, bool>('tw') 
+export const tokenWhiteList = new PersistentMap<string, boolean>('tw') 
 /** maps token name to whether it has been proposed for white listing or not */
-export const proposedToWhiteList = new PersistentMap<string, bool>('pw') 
+export const proposedToWhiteList = new PersistentMap<string, boolean>('pw') 
 /** maps user account to whether it has been proposed to kick or not */
-export const proposedToKick = new PersistentMap<string, bool>('pk') 
+export const proposedToKick = new PersistentMap<string, boolean>('pk') 
 /** maps account to delegate key */
 export const memberAddressByDelegatekey = new PersistentMap<string, string>('md')
 /** array of approvedtokens */
@@ -307,7 +307,7 @@ export class Member {
     /** the loot amount available to this member (combined with shares on ragequit) */
     public loot: u128,
     /** always true once a member has been created */
-    public existing: bool,
+    public existing: boolean,
     /** highest proposal index # on which the member voted YES */
     public highestIndexYesVote: i32,
     /** set to proposalIndex of a passing guild kick proposal for this member, prevents voting on and sponsoring proposals */
@@ -317,7 +317,7 @@ export class Member {
     /** timestamp of when member info was last updated */
     public updated: u64,
     /** is member currently active in the community (true) or have they left (false) */
-    public active: bool,
+    public active: boolean,
     /** community roles member currently has */
     public roles: Array<communityRole>, 
     /** reputation factors that currently make up member's reputation score */
@@ -326,8 +326,8 @@ export class Member {
     {}
 
     static getStatus(accountId: string): boolean {
-        // bool is 0 | 1, boolean is false | true
-        // contains returns bool so cast it to boolean to be able to return it.
+        // boolean is 0 | 1, boolean is false | true
+        // contains returns boolean so cast it to boolean to be able to return it.
         return members.contains(accountId) as boolean;
     }
   
@@ -412,9 +412,10 @@ export class Proposal {
                             13: reputationFactor, 
                             14: assignRole
                             15: affiliation
+                            16: cancelCommit
                         ]
                         */
-    public flags: Array<bool>, 
+    public flags: Array<boolean>, 
     /** the maximum # of total shares and loot encountered at a yes vote on this proposal */
     public maxTotalSharesAndLootAtYesVote: u128,
     /** proposalSubmitted: blockindex when proposal was submitted */
@@ -437,6 +438,10 @@ export class Proposal {
     public memberRoleConfiguration: communityRole,
     /** array of objects that correspond to other information such as proposals that this proposal references */
     public referenceIds: Array<GenericObject>,
+    /** string of a function name */
+    public functionName: string,
+    /** array of object that correspond to function parameters */
+    public parameters: Array<GenericObject>
     )
     {}
 } 

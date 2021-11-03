@@ -24,3 +24,5 @@ export const GUILD: AccountId = 'fund.' + Context.contractName
 export const ESCROW: AccountId = 'escrow.' + Context.contractName
 export const TOTAL: AccountId = 'total.'+ Context.contractName
 
+export const XCC_GAS: u64 = 35000000000000
+

@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
+import { Context, storage, AVLTree, u128, ContractPromise, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -16,7 +16,8 @@ import {
   VoteThreshold,
   GUILD,
   ESCROW,
-  TOTAL
+  TOTAL,
+  XCC_GAS
 } from './dao-types'
 import { 
   members,
@@ -90,7 +91,8 @@ import {
   ERR_HAVE_LOOT,
   ERR_IN_JAIL,
   ERR_NOT_READY,
-  ERR_NOT_A_MEMBER
+  ERR_NOT_A_MEMBER,
+  ERR_FUNCTION_PROPOSAL
 } from './dao-error-messages'
 
 
@@ -470,7 +472,7 @@ function _fairShare(balance: u128, shares: u128, totalShares: u128): u128 {
  * @param proposal
  * flags: [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration]
 */
-function _votingPeriodPassed(proposal: Proposal): bool {
+function _votingPeriodPassed(proposal: Proposal): boolean {
   
   // check that we've finished the voting/grace periods so it's ready for processing
   //let firstAdd = proposal.startingPeriod + storage.getSome<i32>('votingPeriodLength') 
@@ -488,7 +490,7 @@ function _votingPeriodPassed(proposal: Proposal): bool {
  * @param proposal 
  * @returns 
  */
-function _bypass(proposal: Proposal): bool {
+function _bypass(proposal: Proposal): boolean {
   // check to see if we can speed up a failure vote by seeing if there is any chance number of outstanding votes exceeds no votes already cast
   let requiredVotes = getNeededVotes()
   if(u128.ge(proposal.yesVotes, requiredVotes) || u128.ge(proposal.noVotes, requiredVotes)){
@@ -503,7 +505,7 @@ function _bypass(proposal: Proposal): bool {
  * Internal function that determines whether the proposal has passed or not
  * @param proposal
 */
-function _didPass(proposal: Proposal): bool {
+function _didPass(proposal: Proposal): boolean {
 
   // Threshold voting rule (threshold% of total vote)
   let voteThreshold = u128.from(storage.getSome<i32>('voteThreshold'))
@@ -518,7 +520,7 @@ function _didPass(proposal: Proposal): bool {
   u128.muldiv(totalShares, voteThreshold, u128.from('100'))
   let achieved = u128.muldiv(totalVotes, u128.from('100'), totalShares)
   logging.log('achieved' + achieved.toString())
-  let didPass = proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)
+  let didPass = (proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)) as boolean
   logging.log('didpass 0' + didPass.toString())
   // Make the proposal fail if the dilutionBound is exceeded 
   if(u128.lt(u128.mul(u128.add(totalShares, totalLoot), u128.from(storage.getSome<i32>('dilutionBound'))), u128.from(proposal.maxTotalSharesAndLootAtYesVote))) {
@@ -595,7 +597,7 @@ function _didPass(proposal: Proposal): bool {
  * Internal function that is called to return the associated proposal deposit when actions are completed
  * @param to
 */
-function _returnDeposit(to: AccountId): bool {
+function _returnDeposit(to: AccountId): boolean {
   assertValidId(to)
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
@@ -613,7 +615,7 @@ function _returnDeposit(to: AccountId): bool {
  * @param sharesToBurn
  * @param lootToBurn
 */
-export function ragequit(sharesToBurn: u128, lootToBurn: u128): bool {
+export function ragequit(sharesToBurn: u128, lootToBurn: u128): boolean {
   assert(onlyMember(predecessor()), ERR_NOT_A_MEMBER)
   _ragequit(predecessor(), sharesToBurn, lootToBurn)
   return true
@@ -680,7 +682,7 @@ function _ragequit(memberAddress: AccountId, sharesToBurn: u128, lootToBurn: u12
  * otherwise they could potentially be taking away funds that were supposed to go to someone based on a community decision
  * @param highestIndexYesVote
 */
-function canRageQuit(highestIndexYesVote: u32): bool {
+function canRageQuit(highestIndexYesVote: u32): boolean {
   assert(highestIndexYesVote < proposals.size, ERR_PROPOSAL_NO)
   return proposals.getSome(highestIndexYesVote).flags[1]
 }
@@ -701,7 +703,7 @@ export function withdrawBalance(token: AccountId, amount: u128, to: AccountId): 
  * @param amount
  * @param to
 */
-function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): bool {
+function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): boolean {
   assertValidId(to)
   assert(to == predecessor(), 'not account that is withdrawing')
   TokenClass.assertBalance(to, token, amount)
@@ -768,7 +770,8 @@ export function cancelProposal(proposalId: u32, tribute: u128, loot: u128): Prop
 export function makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
   assertValidId(contractId)
   assertValidId(contributor)
-  assert(tokenWhiteList.get(token, false), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.contains(token), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
   assert(u128.ge(Context.attachedDeposit, amount), 'attached deposit must match donation amount')
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
@@ -801,7 +804,8 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
 function _makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
   assertValidId(contractId)
   assertValidId(contributor)
-  assert(tokenWhiteList.get(token, false), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.contains(token), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
   let donationId = contributions.size
@@ -834,7 +838,7 @@ function _makeDonation(contractId: AccountId, contributor: AccountId, token: Acc
  * Effectively prevents them from doing anything within the community.
  * @param memberToKick
 */
-export function ragekick(memberToKick: AccountId): bool {
+export function ragekick(memberToKick: AccountId): boolean {
  
   let member = members.getSome(memberToKick)
 
@@ -851,8 +855,8 @@ export function ragekick(memberToKick: AccountId): bool {
  * Internal private function to determine whether there is an existing member proposal for a given applicant
  * @param applicant
 */
-function _memberProposalPresent(applicant: AccountId): bool {
-  return memberProposals.contains(applicant)
+function _memberProposalPresent(applicant: AccountId): boolean {
+  return memberProposals.contains(applicant) as boolean
 }
 
 
@@ -860,8 +864,8 @@ function _memberProposalPresent(applicant: AccountId): bool {
  * Internal private function to determine whether there is an existing affiliation proposal for a given applicant
  * @param applicant
 */
-function _affiliateProposalPresent(applicant: AccountId): bool {
-  return affiliationProposals.contains(applicant)
+function _affiliateProposalPresent(applicant: AccountId): boolean {
+  return affiliationProposals.contains(applicant) as boolean
 }
 
 
@@ -880,7 +884,7 @@ function _max(x: u64, y: u64): u64 {
  * @param proposalIndex
  * @param proposal
 */
-function _proposalPassed(proposal: Proposal, platformPayment: u128): bool {
+function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
  
   // mark proposal as passed 
   let flags = proposal.flags
@@ -986,6 +990,11 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): bool {
   // If commitment, move funds from bank to escrow
   if(proposal.flags[7]){
     _internalTransfer(GUILD, ESCROW, proposal.paymentToken, proposal.paymentRequested)
+  }
+
+  // If cancel commitment, move funds from escrow to fund
+  if(proposal.flags[16]){
+    _internalTransfer(ESCROW, GUILD, proposal.paymentToken, proposal.paymentRequested)
   }
   
   //make configuration changes if it's a configuration proposal
@@ -1126,7 +1135,7 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): bool {
  * Internal private function to determine if a proposal failed
  * @param proposal
 */
-function _proposalFailed(proposal: Proposal): bool {
+function _proposalFailed(proposal: Proposal): boolean {
 
   //return all tokens to the proposer if not a commitment (not the applicant, because funds come from the proposer)
   if(!proposal.flags[7]){    
@@ -1149,7 +1158,7 @@ function _proposalFailed(proposal: Proposal): bool {
  * @param amount (in yocto)
  * @param account
 */
-function _nearTransfer(amount: u128, account: AccountId): bool {
+function _nearTransfer(amount: u128, account: AccountId): boolean {
   let promise = ContractPromiseBatch.create(account)
   .transfer(amount)
   return true
@@ -1162,7 +1171,7 @@ function _nearTransfer(amount: u128, account: AccountId): bool {
  * @param token (type of token)
  * @param account (where it's being transferred to)
 */
-function _sTRaw(amount: u128, token: AccountId, account: AccountId): bool {
+function _sTRaw(amount: u128, token: AccountId, account: AccountId): boolean {
   assertValidId(account)
 
   // NEAR transfers
@@ -1312,7 +1321,7 @@ export function getPeriodDuration(): i32 {
 /**
  * returns whether account called is currently a member of the community DAO
 */
-export function getMemberStatus(member: AccountId): bool {
+export function getMemberStatus(member: AccountId): boolean {
   if(members.get(member)){
     return true
   }
@@ -1384,7 +1393,7 @@ export function getCurrentPeriod(): u64 {
 /**
  * returns current set of proposal flags for given proposal
 */
-export function getProposalFlags(proposalId: u32): bool[] {
+export function getProposalFlags(proposalId: u32): boolean[] {
   return proposals.getSome(proposalId).flags
 }
 
@@ -1587,9 +1596,10 @@ export function submitMemberProposal (
     tributeToken: AccountId,
     roleNames: Array<string>, 
     contractId: AccountId
-): bool {
+): boolean {
   assert(u128.le(u128.add(sharesRequested, lootRequested), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-  assert(tokenWhiteList.get(tributeToken, false), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.contains(tributeToken), ERR_NOT_WHITELISTED)
+  assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
   assertValidApplicant(applicant)
   assert(members.get(applicant) == null, 'already a member')
   assert(_memberProposalPresent(applicant) == false, 'member proposal already in progress')
@@ -1618,10 +1628,11 @@ export function submitMemberProposal (
       TokenClass.add(predecessor(), depositToken)
     }
 
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[6] = true // member proposal
 
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
   
@@ -1639,7 +1650,9 @@ export function submitMemberProposal (
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
  
     return true
@@ -1661,8 +1674,9 @@ export function submitAffiliationProposal (
   affiliationFee: u128,
   affiliationToken: AccountId,
   contractId: AccountId
-): bool {
-assert(tokenWhiteList.get(affiliationToken, false), ERR_NOT_WHITELISTED)
+): boolean {
+assert(tokenWhiteList.contains(affiliationToken), ERR_NOT_WHITELISTED)
+assert(tokenWhiteList.getSome(affiliationToken), ERR_NOT_WHITELISTED)
 assertValidApplicant(affiliateWith)
 
 let allAffiliations = affiliations.getSome(Context.contractName)
@@ -1685,10 +1699,11 @@ let transferred = _sTRaw(totalAmount, affiliationToken, contractId)
 if(transferred) {
   TokenClass.addToEscrow(predecessor(), affiliationToken, totalAmount)
 
-  let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+  let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
   flags[15] = true // affiliation proposal
 
   let references = new Array<GenericObject>()
+  let parameters = new Array<GenericObject>()
   let defaultObject = new GenericObject('','')
   references.push(defaultObject)
 
@@ -1706,7 +1721,9 @@ if(transferred) {
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    references
+    references,
+    '',
+    parameters
     )
 
   return true
@@ -1730,8 +1747,9 @@ export function submitPayoutProposal (
   paymentToken: AccountId,
   referenceIds: Array<GenericObject>,
   contractId: AccountId
-): bool {
-assert(tokenWhiteList.get(paymentToken, false), ERR_NOT_WHITELISTED_PT)
+): boolean {
+assert(tokenWhiteList.contains(paymentToken), ERR_NOT_WHITELISTED_PT)
+assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
 assertValidApplicant(applicant)
 
 if(members.contains(applicant)) {
@@ -1747,8 +1765,9 @@ let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
 if(transferred) {
   
-  let flags = new Array<bool>(16) 
+  let flags = new Array<boolean>(18) 
   flags[11] = true // payout proposal
+  let parameters = new Array<GenericObject>()
 
   _submitProposal(
     applicant, 
@@ -1764,7 +1783,132 @@ if(transferred) {
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    referenceIds
+    referenceIds,
+    '',
+    parameters
+    )
+
+  return true
+}
+return false
+}
+
+/**
+ * Submit a Function proposal - used to interact with functions on other contracts
+ * @param applicant // applicant
+ * @param paymentRequested // paymentRequested (amount of payment requested) - in yocto if NEAR
+ * @param paymentToken // paymentToken (desired token for payment)
+ * @param parameters // reference Ids
+ * @param contractId
+*/
+export function submitFunctionProposal (
+  applicant: AccountId,
+  contribution: u128,
+  contributionToken: AccountId,
+  functionName: string,
+  parameters: Array<GenericObject>,
+  contractId: AccountId
+): boolean {
+assert(tokenWhiteList.contains(contributionToken), ERR_NOT_WHITELISTED_PT)
+assert(tokenWhiteList.getSome(contributionToken), ERR_NOT_WHITELISTED_PT)
+assertValidApplicant(applicant)
+assertValidId(contractId)
+
+if(members.contains(applicant)) {
+  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+}
+
+// Funds transfers
+let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+let depositToken = storage.getSome<string>('depositToken')
+assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+
+let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
+
+if(transferred) {
+  
+  let flags = new Array<boolean>(18) 
+  flags[17] = true // function proposal
+  let references = new Array<GenericObject>()
+
+  _submitProposal(
+    applicant, 
+    u128.Zero, 
+    u128.Zero, 
+    contribution, 
+    contributionToken, 
+    u128.Zero,
+    '', 
+    flags, 
+    new Array<string>(), 
+    new Array<string>(), 
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    references,
+    functionName,
+    parameters
+    )
+
+  return true
+}
+return false
+}
+
+
+/**
+ * Submit a Cancel Commitment - used to cancel an existing funding commitment and free up funds in escrow
+ * @param applicant // applicant
+ * @param paymentRequested // paymentRequested (amount of payment requested) - in yocto if NEAR
+ * @param paymentToken // paymentToken (desired token for payment)
+ * @param referenceIds // reference Ids
+ * @param contractId
+*/
+export function submitCancelCommit (
+  applicant: AccountId,
+  paymentRequested: u128,
+  paymentToken: AccountId,
+  referenceIds: Array<GenericObject>,
+  contractId: AccountId
+): boolean {
+assert(tokenWhiteList.contains(paymentToken), ERR_NOT_WHITELISTED_PT)
+assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+assertValidApplicant(applicant)
+
+if(members.contains(applicant)) {
+  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+}
+
+// Funds transfers
+let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+let depositToken = storage.getSome<string>('depositToken')
+assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+
+let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
+
+if(transferred) {
+  
+  let flags = new Array<boolean>(18) 
+  flags[16] = true // cancel commitment proposal
+  let parameters = new Array<GenericObject>()
+
+  _submitProposal(
+    applicant, 
+    u128.Zero, 
+    u128.Zero, 
+    u128.Zero, 
+    '', 
+    paymentRequested, 
+    paymentToken, 
+    flags, 
+    new Array<string>(), 
+    new Array<string>(), 
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    referenceIds,
+    '',
+    parameters
     )
 
   return true
@@ -1787,9 +1931,10 @@ export function submitTributeProposal (
   tributeOffered: u128,
   tributeToken: AccountId,
   contractId: AccountId
-): bool {
+): boolean {
 assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-assert(tokenWhiteList.get(tributeToken, false), ERR_NOT_WHITELISTED)
+assert(tokenWhiteList.contains(tributeToken), ERR_NOT_WHITELISTED)
+assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
 assertValidApplicant(applicant)
 if(members.contains(applicant)) {
   assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
@@ -1810,10 +1955,11 @@ let transferred = _sTRaw(totalContribution, tributeToken, contractId)
 if(transferred) {
   TokenClass.addToEscrow(applicant, tributeToken, tributeOffered)
 
-  let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+  let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
   flags[9] = true // tribute proposal
 
   let references = new Array<GenericObject>()
+  let parameters = new Array<GenericObject>()
   let defaultObject = new GenericObject('','')
   references.push(defaultObject)
 
@@ -1831,7 +1977,9 @@ if(transferred) {
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
     new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    references    
+    references,
+    '',
+    parameters
     )
 
   return true
@@ -1853,8 +2001,9 @@ export function submitCommitmentProposal(
   paymentToken: AccountId,
   referenceIds: Array<GenericObject>,
   contractId: AccountId
-  ): bool {
-  assert(tokenWhiteList.get(paymentToken, false), ERR_NOT_WHITELISTED_PT)
+  ): boolean {
+  assert(tokenWhiteList.contains(paymentToken), ERR_NOT_WHITELISTED_PT)
+  assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
   assertValidApplicant(applicant)
   assert(u128.gt(paymentRequested, u128.Zero), 'funding request must be greater than zero')
   
@@ -1870,8 +2019,10 @@ export function submitCommitmentProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let flags = new Array<bool>(16) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
+    let flags = new Array<boolean>(18) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     flags[7] = true // commitment
+
+    let parameters = new Array<GenericObject>()
 
     _submitProposal(
       applicant, 
@@ -1887,7 +2038,9 @@ export function submitCommitmentProposal(
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      referenceIds
+      referenceIds,
+      '',
+      parameters
       )
     return true
   }
@@ -1905,7 +2058,7 @@ export function submitConfigurationProposal(
   applicant: AccountId,
   configuration: Array<string>, 
   contractId: AccountId
-  ): bool {
+  ): boolean {
   assertValidApplicant(applicant)
  
   if(members.contains(applicant)) {
@@ -1920,13 +2073,14 @@ export function submitConfigurationProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[10] = true // configuration
 
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
-
+    
     _submitProposal(
       applicant, 
       u128.Zero, 
@@ -1941,7 +2095,9 @@ export function submitConfigurationProposal(
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -1957,7 +2113,7 @@ export function submitConfigurationProposal(
 export function submitOpportunityProposal(
   applicant: AccountId,
   contractId: AccountId
-  ): bool {
+  ): boolean {
   assertValidApplicant(applicant)
  
   if(members.contains(applicant)) {
@@ -1973,10 +2129,11 @@ export function submitOpportunityProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred) {
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[8] = true // opportunity
 
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
 
@@ -1994,7 +2151,9 @@ export function submitOpportunityProposal(
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -2013,7 +2172,7 @@ export function submitOpportunityProposal(
 export function submitGuildKickProposal(
   memberToKick: AccountId,
   contractId: AccountId
-  ): bool {
+  ): boolean {
     assert(members.contains(memberToKick), 'not a member')
     
     let member = members.getSome(memberToKick)
@@ -2028,10 +2187,11 @@ export function submitGuildKickProposal(
     let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
 
     if(transferred) {
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[5] = true; // guild kick
     
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
 
@@ -2049,7 +2209,9 @@ export function submitGuildKickProposal(
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -2062,9 +2224,10 @@ export function submitGuildKickProposal(
  * @param tokenToWhitelist
  * @param contractId
 */
-export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToken: AccountId, contractId: AccountId): bool {
+export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToken: AccountId, contractId: AccountId): boolean {
   assertValidId(tokenToWhitelist)
-  assert(!tokenWhiteList.get(tokenToWhitelist, false), ERR_ALREADY_WHITELISTED)
+  assert(!tokenWhiteList.contains(tokenToWhitelist), ERR_ALREADY_WHITELISTED)
+  assert(!tokenWhiteList.getSome(tokenToWhitelist), ERR_ALREADY_WHITELISTED)
   assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_WHITELISTED)
 
   // Funds transfers
@@ -2074,10 +2237,11 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[4] = true; // whitelist
     
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
 
@@ -2095,7 +2259,9 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -2125,7 +2291,7 @@ export function submitCommunityRoleProposal(
   roleDescription: string,
   action: string, // add, remove, edit, nil
   contractId: AccountId
-  ): bool {
+  ): boolean {
   assertValidId(contractId)
   
   // Funds transfers (Proposal Deposit)
@@ -2136,7 +2302,7 @@ export function submitCommunityRoleProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
     flags[12] = true; // communityRole
 
     let newRole = new communityRole(
@@ -2151,6 +2317,7 @@ export function submitCommunityRoleProposal(
         )
       
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
 
@@ -2168,7 +2335,9 @@ export function submitCommunityRoleProposal(
       newRole,
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -2201,7 +2370,7 @@ export function submitAssignRoleProposal(
   roleDescription: string,
   action: string, // add, remove, edit, nil
   contractId: AccountId
-  ): bool {
+  ): boolean {
   assertValidId(contractId)
   
   // Funds transfers (Proposal Deposit)
@@ -2212,7 +2381,7 @@ export function submitAssignRoleProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
     flags[14] = true; // assignRole
 
     let newMemberRoleConfiguration = new communityRole(
@@ -2227,6 +2396,7 @@ export function submitAssignRoleProposal(
     )
     
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
 
@@ -2244,7 +2414,9 @@ export function submitAssignRoleProposal(
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
       newMemberRoleConfiguration,
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -2275,7 +2447,7 @@ export function submitReputationFactorProposal(
   repFactorActions: Array<string>,
   action: string, // add, edit, delete, nil
   contractId: AccountId
-  ): bool {
+  ): boolean {
   assertValidId(contractId)
   
   // Funds transfers (Proposal Deposit)
@@ -2286,7 +2458,7 @@ export function submitReputationFactorProposal(
   let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
 
   if(transferred){
-    let flags = new Array<bool>(16) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[13] = true; // reputationFactor
 
     let newRepFactor = new reputationFactor(
@@ -2301,6 +2473,7 @@ export function submitReputationFactorProposal(
         )
 
     let references = new Array<GenericObject>()
+    let parameters = new Array<GenericObject>()
     let defaultObject = new GenericObject('','')
     references.push(defaultObject)
 
@@ -2318,7 +2491,9 @@ export function submitReputationFactorProposal(
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       newRepFactor,
       new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references
+      references,
+      '',
+      parameters
       )
     return true
   }
@@ -2349,14 +2524,16 @@ function _submitProposal(
   tributeToken: AccountId,
   paymentRequested: u128,
   paymentToken: AccountId,
-  flags: Array<bool>,
+  flags: Array<boolean>,
   roleNames: Array<string>,
   configuration: Array<string>,
   roleConfiguration: communityRole,
   reputationConfiguration: reputationFactor,
   memberRoleConfiguration: communityRole,
-  referenceIds: Array<GenericObject>
-): bool {
+  referenceIds: Array<GenericObject>,
+  functionName: string,
+  parameters: Array<GenericObject>
+): boolean {
   let proposalId = proposals.size
   proposals.set(proposalId, new Proposal(
     proposalId, // proposal Id
@@ -2383,7 +2560,9 @@ function _submitProposal(
     roleConfiguration, // roleconfiguration
     reputationConfiguration, // reputationConfiguration
     memberRoleConfiguration, // member specific role configuration
-    referenceIds // references to other proposals
+    referenceIds, // references to other proposals
+    functionName, // name of function to call
+    parameters // parameters for the function
   ))
 
   let newVote = new PersistentMap<u32, string>('uv' + predecessor())
@@ -2408,7 +2587,7 @@ export function sponsorProposal(
   proposalId: u32, 
   depositToken: AccountId, 
   contractId: AccountId
-  ): bool {
+  ): boolean {
  
   assert(onlyDelegate(predecessor()), 'not a delegate')
 
@@ -2446,17 +2625,18 @@ export function sponsorProposal(
   
     // Whitelist proposal
     if(proposal.flags[4]) {
-        assert(!tokenWhiteList.get(proposal.tributeToken, false), 'already whitelisted')
-        assert(!proposedToWhiteList.get(proposal.tributeToken, false), 'whitelist proposed already')
+        assert(!tokenWhiteList.contains(proposal.tributeToken), ERR_ALREADY_WHITELISTED)
+        assert(!tokenWhiteList.getSome(proposal.tributeToken), 'already whitelisted')
+        assert(!proposedToWhiteList.contains(proposal.tributeToken), 'whitelist proposed already')
+        assert(!proposedToWhiteList.getSome(proposal.tributeToken), 'whitelist proposed already')
         assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
         proposedToWhiteList.set(proposal.tributeToken, true)
     }
 
     //Guild Kick Proposal
     if (proposal.flags[5]) {
-      if(proposedToKick.contains(proposal.applicant)) {
-        assert(!proposedToKick.getSome(proposal.applicant), 'already proposed to kick')
-      }
+      assert(!proposedToKick.contains(proposal.applicant), 'already proposed to kick')
+      assert(!proposedToKick.getSome(proposal.applicant), 'already proposed to kick')
       proposedToKick.set(proposal.applicant, true)
     }
 
@@ -2519,7 +2699,7 @@ export function sponsorProposal(
  * @param proposalId // proposal id
  * @param vote // yes or no
 */
-export function submitVote(proposalId: u32, vote: string): bool {
+export function submitVote(proposalId: u32, vote: string): boolean {
 
   assert(onlyDelegate(predecessor()), ERR_NOT_DELEGATE)
 
@@ -2594,7 +2774,7 @@ export function submitVote(proposalId: u32, vote: string): bool {
  * Process proposal - process a proposal that has gone through the voting period and return deposit to sponsor and proposer
  * @param proposalId // proposal index used to find the proposal
 */
-export function processProposal(proposalId: u32, platformPayment: u128): bool {
+export function processProposal(proposalId: u32, platformPayment: u128, contractId: AccountId, functionName: string, parameters: Array<GenericObject>): boolean {
 
   // check to make sure the proposal is ready for processing
   let proposal = proposals.getSome(proposalId)
@@ -2610,6 +2790,12 @@ export function processProposal(proposalId: u32, platformPayment: u128): bool {
   // check to see if it's a guildkick proposal
   if(proposal.flags[5]){
     processGuildKickProposal(proposal.proposalId)
+    return true
+  }
+
+  // check to see if it's a function proposal
+  if(proposal.flags[17]){
+    processFunctionProposal(proposal.proposalId, contractId, functionName, parameters)
     return true
   }
 
@@ -2677,6 +2863,47 @@ function processWhitelistProposal(proposalId: u32): void {
   }
 
   proposedToWhiteList.set(proposal.tributeToken, false)
+ 
+  _returnDeposit(proposal.sponsor)
+  _returnDeposit(proposal.proposer)
+  
+}
+
+/**
+ * Process Function proposal - process a function proposal that has gone through the voting period and return deposit to sponsor and proposer
+ * @param proposalId // proposal index used to find the proposal
+*/
+function processFunctionProposal(proposalId: u32, contractId: AccountId, functionName: string, parameters: Array<GenericObject>): void {
+  let proposal = proposals.getSome(proposalId)
+
+  assert(_votingPeriodPassed(proposal), 'not ready for processing')
+
+  assert(proposal.flags[17], ERR_FUNCTION_PROPOSAL)
+
+  // mark as processed
+  let flags = proposal.flags
+  flags[1] = true; //processed
+  proposal.flags = flags
+  proposals.set(proposal.proposalId, proposal)
+
+  let didPass = _didPass(proposal)
+
+  if (didPass) {
+    // mark as passed
+    let flags = proposal.flags
+    flags[2] = true //didPass
+    proposal.flags = flags
+    proposals.set(proposal.proposalId, proposal)
+
+    // insert function action here
+    ContractPromise.create(
+      contractId,
+      functionName,
+      parameters[0],
+      XCC_GAS
+    )
+
+  }
  
   _returnDeposit(proposal.sponsor)
   _returnDeposit(proposal.proposer)
@@ -3032,7 +3259,7 @@ function _undelegateAll(currentAccount: AccountId): boolean {
  * @param token
  * @param amount
 */
-export function updateDelegateKey(newDelegateKey: AccountId): bool {
+export function updateDelegateKey(newDelegateKey: AccountId): boolean {
 
   assert(onlyShareholder(predecessor()), ERR_NOT_SHAREHOLDER)
   assertValidId(newDelegateKey)
