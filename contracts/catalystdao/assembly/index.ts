@@ -216,7 +216,7 @@ export function init(
     if(_approvedTokens[i] != 'Ⓝ' ){
     assertValidId(_approvedTokens[i])
     }
-    assert(!tokenWhiteList.contains(_approvedTokens[i]), ERR_DUPLICATE_TOKEN)
+    assert(tokenWhiteList.contains(_approvedTokens[i]) == false, ERR_DUPLICATE_TOKEN)
     tokenWhiteList.set(_approvedTokens[i], true)
     approvedTokens.push(_approvedTokens[i])
   }
@@ -770,8 +770,12 @@ export function cancelProposal(proposalId: u32, tribute: u128, loot: u128): Prop
 export function makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
   assertValidId(contractId)
   assertValidId(contributor)
-  assert(tokenWhiteList.contains(token), ERR_NOT_WHITELISTED)
-  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
+  if(tokenWhiteList.contains(token)){
+    assert(tokenWhiteList.getSome(token) == true, ERR_NOT_WHITELISTED)
+  } else {
+    assert(false, 'token not whitelisted')
+  }
+  
   assert(u128.ge(Context.attachedDeposit, amount), 'attached deposit must match donation amount')
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
@@ -804,8 +808,12 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
 function _makeDonation(contractId: AccountId, contributor: AccountId, token: AccountId, amount: u128): boolean {
   assertValidId(contractId)
   assertValidId(contributor)
-  assert(tokenWhiteList.contains(token), ERR_NOT_WHITELISTED)
-  assert(tokenWhiteList.getSome(token), ERR_NOT_WHITELISTED)
+  if(tokenWhiteList.contains(token)){
+    assert(tokenWhiteList.getSome(token) == true, ERR_NOT_WHITELISTED)
+  } else {
+    assert(false, 'token not whitelisted')
+  }
+
   assert(u128.gt(amount, u128.Zero), 'contribution must be greater than zero')
   
   let donationId = contributions.size
@@ -1598,8 +1606,12 @@ export function submitMemberProposal (
     contractId: AccountId
 ): boolean {
   assert(u128.le(u128.add(sharesRequested, lootRequested), u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-  assert(tokenWhiteList.contains(tributeToken), ERR_NOT_WHITELISTED)
-  assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
+  if(tokenWhiteList.contains(tributeToken)){
+    assert(tokenWhiteList.getSome(tributeToken) == true, ERR_NOT_WHITELISTED)
+  } else {
+    assert(false, 'token not whitelisted')
+  }
+  
   assertValidApplicant(applicant)
   assert(members.get(applicant) == null, 'already a member')
   assert(_memberProposalPresent(applicant) == false, 'member proposal already in progress')
@@ -1675,8 +1687,12 @@ export function submitAffiliationProposal (
   affiliationToken: AccountId,
   contractId: AccountId
 ): boolean {
-assert(tokenWhiteList.contains(affiliationToken), ERR_NOT_WHITELISTED)
-assert(tokenWhiteList.getSome(affiliationToken), ERR_NOT_WHITELISTED)
+  if(tokenWhiteList.contains(affiliationToken)){
+    assert(tokenWhiteList.getSome(affiliationToken) == true, ERR_NOT_WHITELISTED)
+  } else {
+    assert(false, 'token not whitelisted')
+  }
+
 assertValidApplicant(affiliateWith)
 
 let allAffiliations = affiliations.getSome(Context.contractName)
@@ -1748,8 +1764,12 @@ export function submitPayoutProposal (
   referenceIds: Array<GenericObject>,
   contractId: AccountId
 ): boolean {
-assert(tokenWhiteList.contains(paymentToken), ERR_NOT_WHITELISTED_PT)
-assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+  if(tokenWhiteList.contains(paymentToken)){
+    assert(tokenWhiteList.getSome(paymentToken) == true, ERR_NOT_WHITELISTED_PT)
+  } else {
+    assert(false, 'payment token not whitelisted')
+  }
+
 assertValidApplicant(applicant)
 
 if(members.contains(applicant)) {
@@ -1809,8 +1829,12 @@ export function submitFunctionProposal (
   parameters: Array<GenericObject>,
   contractId: AccountId
 ): boolean {
-assert(tokenWhiteList.contains(contributionToken), ERR_NOT_WHITELISTED_PT)
-assert(tokenWhiteList.getSome(contributionToken), ERR_NOT_WHITELISTED_PT)
+  if(tokenWhiteList.contains(contributionToken)){
+    assert(tokenWhiteList.getSome(contributionToken) == true, ERR_NOT_WHITELISTED_PT)
+  } else {
+    assert(false, 'payment token not whitelisted')
+  }
+
 assertValidApplicant(applicant)
 assertValidId(contractId)
 
@@ -1871,8 +1895,12 @@ export function submitCancelCommit (
   referenceIds: Array<GenericObject>,
   contractId: AccountId
 ): boolean {
-assert(tokenWhiteList.contains(paymentToken), ERR_NOT_WHITELISTED_PT)
-assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+  if(tokenWhiteList.contains(paymentToken)){
+    assert(tokenWhiteList.getSome(paymentToken) == true, ERR_NOT_WHITELISTED_PT)
+  } else {
+    assert(false, 'payment token not whitelisted')
+  }
+
 assertValidApplicant(applicant)
 
 if(members.contains(applicant)) {
@@ -1933,8 +1961,12 @@ export function submitTributeProposal (
   contractId: AccountId
 ): boolean {
 assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-assert(tokenWhiteList.contains(tributeToken), ERR_NOT_WHITELISTED)
-assert(tokenWhiteList.getSome(tributeToken), ERR_NOT_WHITELISTED)
+if(tokenWhiteList.contains(tributeToken)){
+  assert(tokenWhiteList.getSome(tributeToken) == true, ERR_NOT_WHITELISTED)
+} else {
+  assert(false, 'token not whitelisted')
+}
+
 assertValidApplicant(applicant)
 if(members.contains(applicant)) {
   assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
@@ -2002,8 +2034,12 @@ export function submitCommitmentProposal(
   referenceIds: Array<GenericObject>,
   contractId: AccountId
   ): boolean {
-  assert(tokenWhiteList.contains(paymentToken), ERR_NOT_WHITELISTED_PT)
-  assert(tokenWhiteList.getSome(paymentToken), ERR_NOT_WHITELISTED_PT)
+  if(tokenWhiteList.contains(paymentToken)){
+    assert(tokenWhiteList.getSome(paymentToken) == true, ERR_NOT_WHITELISTED_PT)
+  } else {
+    assert(false, 'payment token not whitelisted')
+  }
+ 
   assertValidApplicant(applicant)
   assert(u128.gt(paymentRequested, u128.Zero), 'funding request must be greater than zero')
   
@@ -2226,8 +2262,9 @@ export function submitGuildKickProposal(
 */
 export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToken: AccountId, contractId: AccountId): boolean {
   assertValidId(tokenToWhitelist)
-  assert(!tokenWhiteList.contains(tokenToWhitelist), ERR_ALREADY_WHITELISTED)
-  assert(!tokenWhiteList.getSome(tokenToWhitelist), ERR_ALREADY_WHITELISTED)
+  if(tokenWhiteList.contains(tokenToWhitelist)){
+    assert(tokenWhiteList.getSome(tokenToWhitelist) == false, ERR_ALREADY_WHITELISTED)
+  }
   assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_WHITELISTED)
 
   // Funds transfers
@@ -2625,18 +2662,21 @@ export function sponsorProposal(
   
     // Whitelist proposal
     if(proposal.flags[4]) {
-        assert(!tokenWhiteList.contains(proposal.tributeToken), ERR_ALREADY_WHITELISTED)
-        assert(!tokenWhiteList.getSome(proposal.tributeToken), 'already whitelisted')
-        assert(!proposedToWhiteList.contains(proposal.tributeToken), 'whitelist proposed already')
-        assert(!proposedToWhiteList.getSome(proposal.tributeToken), 'whitelist proposed already')
+        if(tokenWhiteList.contains(proposal.tributeToken)){
+          assert(tokenWhiteList.getSome(proposal.tributeToken) == false, 'already whitelisted')
+        }
+        if(proposedToWhiteList.contains(proposal.tributeToken)){
+          assert(proposedToWhiteList.getSome(proposal.tributeToken) == false, 'whitelist proposed already')
+        }
         assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
         proposedToWhiteList.set(proposal.tributeToken, true)
     }
 
     //Guild Kick Proposal
     if (proposal.flags[5]) {
-      assert(!proposedToKick.contains(proposal.applicant), 'already proposed to kick')
-      assert(!proposedToKick.getSome(proposal.applicant), 'already proposed to kick')
+      if(proposedToKick.contains(proposal.applicant)){
+        assert(proposedToKick.getSome(proposal.applicant) == false, 'already proposed to kick')
+      }
       proposedToKick.set(proposal.applicant, true)
     }
 
