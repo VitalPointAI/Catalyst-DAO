@@ -1,4 +1,4 @@
-import { u128, AVLTree, PersistentMap, PersistentVector, PersistentUnorderedMap, logging } from 'near-sdk-as'
+import { u128, base64, AVLTree, PersistentMap, PersistentVector, MapEntry, PersistentUnorderedMap } from 'near-sdk-as'
 import { ERR_INSUFFICIENT_BALANCE, ERR_NOT_A_MEMBER, ERR_NOT_DELEGATE } from './dao-error-messages'
 import { AccountId, GUILD, ESCROW, TOTAL } from './dao-types'
 import { isPositive } from './utils'
@@ -28,14 +28,14 @@ export const memberProposals = new PersistentMap<AccountId, string>('mp')
 export const affiliationProposals = new PersistentUnorderedMap<AccountId, Proposal>('ap')
 // Roles Structures
 /** roles assigned to member - member to roleName to role */
-export const memberRoles = new PersistentUnorderedMap<AccountId, AVLTree<RoleName, communityRole>>('mr') 
+export const memberRoles = new PersistentUnorderedMap<AccountId, AVLTree<RoleName, CommunityRole>>('mr') 
 /** roles defined by the community - map contractId to roleName to communityRole */
-export const roles = new PersistentUnorderedMap<ContractId, AVLTree<RoleName, communityRole>>('c')
+export const roles = new PersistentUnorderedMap<ContractId, AVLTree<RoleName, CommunityRole>>('c')
 // Reputation Structures
 /** roles assigned to member - member to roleName to role */
-export const memberRepFactors = new PersistentUnorderedMap<AccountId, AVLTree<ReputationFactorName, reputationFactor>>('rf') 
+export const memberRepFactors = new PersistentUnorderedMap<AccountId, AVLTree<ReputationFactorName, ReputationFactor>>('rf') 
 /** reputation factors defined by the community - map contractId to repfactorname to reputationFactor */
-export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, reputationFactor>>('crf') 
+export const reputationFactors = new PersistentUnorderedMap<ContractId, AVLTree<ReputationFactorName, ReputationFactor>>('crf') 
 /** maps token name to whether it is whitelisted or not */
 export const tokenWhiteList = new PersistentMap<string, boolean>('tw') 
 /** maps token name to whether it has been proposed for white listing or not */
@@ -55,7 +55,7 @@ export const affiliations = new PersistentUnorderedMap<ContractId, PersistentMap
 /** Maps Member account to Delegate account to delegate info */
 export const memberDelegations = new PersistentUnorderedMap<AccountId, AVLTree<Delegatee, DelegationInfo>>('mde')
 /** Maps Member account to Account (receiving delegations from) to amount */
-export const receivedDelegations = new PersistentUnorderedMap<AccountId, AVLTree<AccountId, Shares>>('rf')
+export const receivedDelegations = new PersistentUnorderedMap<AccountId, AVLTree<AccountId, Shares>>('rd')
 
 @nearBindgen
 export class TokenAccounting {
@@ -66,15 +66,10 @@ export class TokenAccounting {
     private getTokenMap(account: AccountId, token: TokenName, balance: Balance = u128.Zero): PersistentMap<string, u128> {
         let exists = tokenBalances.contains(account)
         if (exists) {
-            logging.log('here 2')
             return tokenBalances.getSome(account)
-
-            
         } else {
             let newTokenBalanceMap = new PersistentMap<string, u128>('tb' + account)
-            logging.log('here 3')
             newTokenBalanceMap.set(token, balance)
-            logging.log('here 4')
             return newTokenBalanceMap
         }
     }
@@ -88,9 +83,7 @@ export class TokenAccounting {
 
     sub(account: AccountId, token: TokenName, balance: Balance): void {
         let tokenMap = this.getTokenMap(account, token, balance);
-        logging.log('here 0')
         tokenMap.set(token, u128.sub(tokenMap.get(token, u128.Zero) as u128, balance));
-        logging.log('here 1')
         tokenBalances.set(account, tokenMap);
     }
 
@@ -135,14 +128,12 @@ export class TokenAccounting {
 
     withdrawFromGuild(account: AccountId, token: TokenName, balance: Balance): void {
         this.sub(GUILD, token, balance);
-        logging.log('here 5')
         this.withdrawFromTotal(account, token, balance);
     }
 
     // used when a member joined with no contribution but can leave with a share of fund
     withdrawFromGuildNoBalance(token: TokenName, balance: Balance): void {
         this.sub(GUILD, token, balance);
-        logging.log('here 5')
         this.withdrawFromTotalNoBalance(token, balance);
     }
 
@@ -165,9 +156,7 @@ export class TokenAccounting {
 
     withdrawFromTotal(account: AccountId, token: TokenName, balance: Balance): void {
         this.sub(account, token, balance);
-        logging.log('here 6')
         this.sub(TOTAL, token, balance);
-        logging.log('here 7')
     }
 
     withdrawFromTotalNoBalance(token: TokenName, balance: Balance): void {
@@ -211,6 +200,25 @@ export class TokenBalanceMap {
 }
 
 @nearBindgen
+export class MethodCall {
+    constructor(
+        public methodName: string,
+        public args: Array<Uint8Array>,
+        public deposit: u128,
+        public gas: u64
+    )
+    {}
+}
+
+@nearBindgen
+export class Args {
+    constructor(
+        public params: Array<MapEntry<string, string>>
+    )
+    {}
+}
+
+@nearBindgen
 export class UserVote {
     constructor(
         public proposalId: i32,
@@ -249,7 +257,7 @@ export class GenericObject {
 }
 
 @nearBindgen
-export class communityRole {
+export class CommunityRole {
   constructor(
     /** name of role */
     public roleName: string,
@@ -267,11 +275,12 @@ export class communityRole {
     public roleDescription: string,
     /** add, update, delete, nil - actions used when proposal passes */
     public action: string,
-  ){}
+  )
+  {}
 }
 
 @nearBindgen
-export class reputationFactor {
+export class ReputationFactor {
   constructor(
     /** name of reputation factor */
     public repFactorName: string,
@@ -319,9 +328,9 @@ export class Member {
     /** is member currently active in the community (true) or have they left (false) */
     public active: boolean,
     /** community roles member currently has */
-    public roles: Array<communityRole>, 
+    public roles: Array<CommunityRole>, 
     /** reputation factors that currently make up member's reputation score */
-    public reputation: Array<reputationFactor>,
+    public reputation: Array<ReputationFactor>,
     )
     {}
 
@@ -431,17 +440,17 @@ export class Proposal {
     /** [periodDuration, votingPeriodLength, gracePeriodLength, proposalDeposit, dilutionBound] */
     public configuration: Array<string>,
     /** configuration changes to existing/add new roles */
-    public roleConfiguration: communityRole,
+    public roleConfiguration: Array<CommunityRole>,
     /** configuration changes to existing/add new reputation factors */
-    public reputationConfiguration: reputationFactor,
+    public reputationConfiguration: Array<ReputationFactor>,
     /** member specific configuration changes to existing roles  */
-    public memberRoleConfiguration: communityRole,
+    public memberRoleConfiguration: Array<CommunityRole>,
     /** array of objects that correspond to other information such as proposals that this proposal references */
-    public referenceIds: Array<GenericObject>,
+    public referenceIds: Array<MapEntry<string, string>>,
     /** string of a function name */
     public functionName: string,
     /** array of object that correspond to function parameters */
-    public parameters: Array<GenericObject>
+    public parameters: Array<MapEntry<string, string>>
     )
     {}
 } 

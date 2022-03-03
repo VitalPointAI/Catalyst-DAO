@@ -39,6 +39,7 @@ export function getDaoList(start: i32, end: i32): Array<DaoModel> {
   return daos.values(start as u32, end as u32)
 }
 
+
 export function getDaoListLength(): u32 {
   return daos.size
 }
@@ -50,9 +51,11 @@ export function getDaoByAccount(accountId: string): DaoModel {
   return daos.get(index) as DaoModel;
 }
 
+
 export function getDaoIndex(accountId: string): i32 {
   return daoIndex.contains(accountId) ? daoIndex.getSome(accountId) : -1
 }
+
 
 export function inactivateDAO(contractId: string): boolean {
   assert(env.isValidAccountID(contractId), 'not a valid account')
@@ -65,27 +68,38 @@ export function inactivateDAO(contractId: string): boolean {
    thisDao.status = 'inactive'
    daos.set(index, thisDao)
 
+   logging.log(`{
+     "EVENT_JSON":{
+       "standard":"nep171",
+       "version":"1.0.0",
+       "event":"inactivateDAO",
+       "data":{
+         "contractId":"${contractId}",
+         "status":"inactive",
+         "deactivated":${Context.blockTimestamp}
+      }}}`)
+
    return true
 }
 
-export function deleteDAO(accountId: string, beneficiary: string): ContractPromiseBatch {
-  assert(env.isValidAccountID(accountId), 'not a valid account')
-  assert(env.isValidAccountID(beneficiary), 'not a valid beneficiary account')
+// export function deleteDAO(accountId: string, beneficiary: string): ContractPromiseBatch {
+//   assert(env.isValidAccountID(accountId), 'not a valid account')
+//   assert(env.isValidAccountID(beneficiary), 'not a valid beneficiary account')
 
-  // get DAO's index, ensuring it is in the daos vector
-  let index = getDaoIndex(accountId)
-  assert(index != -1, 'dao does not exist - can not delete')
+//   // get DAO's index, ensuring it is in the daos vector
+//   let index = getDaoIndex(accountId)
+//   assert(index != -1, 'dao does not exist - can not delete')
 
-  daos.delete(index)
-  daoIndex.delete(accountId)
+//   daos.delete(index)
+//   daoIndex.delete(accountId)
   
-  // if we make it here, the DAO is effectively removed from our tracking mechanisms, so the account can be deleted with 
-  // anything left in it going to the beneficiary address
-  let promise = ContractPromiseBatch.create(accountId)
-                                    .delete_account(beneficiary)
+//   // if we make it here, the DAO is effectively removed from our tracking mechanisms, so the account can be deleted with 
+//   // anything left in it going to the beneficiary address
+//   let promise = ContractPromiseBatch.create(accountId)
+//                                     .delete_account(beneficiary)
   
-  return promise
-}
+//   return promise
+// }
 
 // export function manualDeleteDao(accountId: string): boolean {
 //    // get DAO's index, ensuring it is in the daos vector
@@ -99,6 +113,7 @@ export function deleteDAO(accountId: string, beneficiary: string): ContractPromi
 
 export function createDAO(
   accountId: string,
+  did: string,
   deposit: u128
 ): ContractPromiseBatch {
   assert(Context.attachedDeposit >= deposit, 'not enough deposit was attached') 
@@ -116,8 +131,22 @@ export function createDAO(
   let nextIndex = daos.size == 0 ? 0 : daos.max() + 1;
   daoIndex.set(accountId, nextIndex) 
 
-  let newDaoModel = new DaoModel(accountId, Context.blockTimestamp, Context.predecessor, 'active')
+  let newDaoModel = new DaoModel(accountId, Context.blockTimestamp, Context.predecessor, 'active', did)
   daos.set(nextIndex, newDaoModel)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"createDAO",
+      "data":{
+        "contractId":"${accountId}",
+        "did":"${did}",
+        "deposit":"${deposit}",
+        "status":"active",
+        "created":${Context.blockTimestamp},
+        "summoner":"${Context.predecessor}"
+    }}}`)
 
   return promise
 }

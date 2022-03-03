@@ -4,7 +4,8 @@ export class DaoModel {
     public contractId: string,
     public created: u64,
     public summoner: string,
-    public status: string
+    public status: string, 
+    public did: string
   )
   {}
 }

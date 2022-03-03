@@ -1,6 +1,6 @@
   
 
-import { Context, storage, AVLTree, u128, ContractPromise, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
+import { Context, storage, AVLTree, MapEntry, u128, ContractPromise, ContractPromiseBatch, PersistentMap, logging } from "near-sdk-as"
 import { 
   assertValidId,
   assertValidApplicant,
@@ -24,10 +24,10 @@ import {
   memberAddressByDelegatekey,
   memberProposals,
   tokenWhiteList,
-  communityRole,
+  CommunityRole,
   memberRoles,
   roles,
-  reputationFactor,
+  ReputationFactor,
   reputationFactors,
   memberRepFactors,
   Member,
@@ -48,7 +48,8 @@ import {
   affiliations,
   affiliationProposals,
   receivedDelegations,
-  tokenBalances
+  MethodCall,
+  Args
  } from './dao-models'
 import {
   ERR_DAO_ALREADY_INITIALIZED,
@@ -113,6 +114,41 @@ export const MAX_TOKEN_WHITELIST_COUNT: i32 = 400 // maximum number of whitelist
 export const MAX_TOKEN_GUILDBANK_COUNT: i32 = 400 // maximum number of tokens with non-zero balance in guildbank
 export const MAX_DELEGATION_LIMIT: u32 = 10 // maximum number of delegations someone can do (prevent running out of gas when performing bulk undelegate actions)
 export const ONE_NEAR = u128.from('1000000000000000000000000')
+
+let references = new Array<MapEntry<string, string>>()
+let defaultRefObject = new MapEntry<string, string>('','')
+//let defaultRefObject = new GenericObject('','')
+references.push(defaultRefObject)
+
+let parameters = new Array<MapEntry<string, string>>()
+//let parameters = new Array<GenericObject>()
+//et defaultParamObject = new MapEntry<string, string>('','')
+//let defaultParamObject = new GenericObject('','')
+//parameters.push(defaultParamObject)
+
+let comRoles = new Array<CommunityRole>()
+let defaultCommunityRole = new CommunityRole(
+  '', 
+  u128.Zero, 
+  0, 
+  0, 
+  new Array<string>(),
+  new Array<string>(), 
+  '', 
+  '')
+  comRoles.push(defaultCommunityRole)
+
+  let repFactors = new Array<ReputationFactor>()
+  let defaultReputationFactor = new ReputationFactor(
+    '', 
+    u128.Zero, 
+    0, 
+    0, 
+    '', 
+    new Array<string>(), 
+    new Array<string>(), 
+    '')
+    repFactors.push(defaultReputationFactor)
                                       
 // ********************
 // MODIFIERS
@@ -259,28 +295,46 @@ export function init(
   storage.set<u128>('totalMembers', u128.Zero)
 
   // transfer summoner contribution to the community fund
-  let transferred = _sTRaw(_contribution, depositToken, _contractId)
+  TokenClass.addContribution(predecessor(), depositToken, _contribution)
+  _sTRaw(_contribution, depositToken, _contractId)
+  // makes member object for summoner and puts it into the members storage
+  members.set(predecessor(), 
+    new Member(
+      predecessor(), 
+      _shares, 
+      u128.Zero, 
+      u128.Zero, 
+      u128.Zero, 
+      true, 
+      0, 
+      0, 
+      Context.blockTimestamp, 
+      Context.blockTimestamp, 
+      true,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>()
+      comRoles,
+      repFactors
+      ))
   
-  if(transferred) {
-    TokenClass.addContribution(predecessor(), depositToken, _contribution)
- 
-    // makes member object for summoner and puts it into the members storage
-    members.set(predecessor(), 
-      new Member(
-        predecessor(), 
-        _shares, 
-        u128.Zero, 
-        u128.Zero, 
-        u128.Zero, 
-        true, 
-        0, 
-        0, 
-        Context.blockTimestamp, 
-        Context.blockTimestamp, 
-        true,
-        new Array<communityRole>(),
-        new Array<reputationFactor>()
-        ))
+    logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"newMember",
+      "data":{
+        "delegateKey":"${predecessor()}",
+        "shares":"${_shares}",
+        "delegatedShares":"0",
+        "receivedDelegations":"0",
+        "loot":"0",
+        "existing":${true},
+        "highestIndexYesVote":"0",
+        "jailed":0,
+        "joined":${Context.blockTimestamp},
+        "updated":${Context.blockTimestamp},
+        "active":${true}
+      }}}`)
     
     // initiate vote tracking
     let newVote = new PersistentMap<u32, string>('uv' + predecessor())
@@ -289,6 +343,17 @@ export function init(
       
     let currentMembers = storage.getSome<u128>('totalMembers')
     storage.set('totalMembers', u128.add(currentMembers, u128.from(1)))
+    let newTotalMembers = storage.getSome<u128>('totalMembers')
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"totalMemberChange",
+        "data":{
+          "totalMembers":"${newTotalMembers}",
+          "time":${Context.blockTimestamp}
+        }}}`)
 
     memberAddressByDelegatekey.set(predecessor(), predecessor())
 
@@ -296,7 +361,28 @@ export function init(
   
     //set init to done
     storage.set<string>("init", "done")
-  }
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"init",
+      "data":{
+        "approvedTokens":${_approvedTokens},
+        "periodDuration":"${_periodDuration}",
+        "votingPeriodLength":"${_votingPeriodLength}",
+        "gracePeriodLength":"${_gracePeriodLength}",
+        "proposalDeposit":"${_proposalDeposit}",
+        "dilutionBound":"${_dilutionBound}",
+        "voteThreshold":"${_voteThreshold}",
+        "shares":"${_shares}",
+        "contribution":"${_contribution}",
+        "platformSupportPercent":"${_platformSupportPercent}",
+        "platformAccount":"${_platformAccount}",
+        "contractId":"${_contractId}",
+        "depositToken":"${depositToken}",
+        "owner":"${Context.predecessor}"
+      }}}`)
 
   return Context.blockTimestamp
 }
@@ -390,6 +476,24 @@ storage.set<u64>('updated', Context.blockTimestamp)
 storage.set<u128>('platformSupportPercent', _platformSupportPercent)
 storage.set<AccountId>('platformAccount', _platformAccount)
 
+logging.log(`{
+  "EVENT_JSON":{
+    "standard":"nep171",
+    "version":"1.0.0",
+    "event":"setInit",
+    "data":{
+      "periodDuration":"${_periodDuration}",
+      "gracePeriodLength":"${_gracePeriodLength}",
+      "votingPeriodLength":"${_votingPeriodLength}",
+      "proposalDeposit":"${_proposalDeposit}",
+      "dilutionBound":"${_dilutionBound}",
+      "voteThreshold":"${_voteThreshold}",
+      "platformSupportPercent":"${_platformSupportPercent}",
+      "platformAccount":"${_platformAccount}",
+      "updated":${Context.blockTimestamp},
+      "owner":"${Context.predecessor}"
+    }}}`)
+
 return Context.blockTimestamp
 }
 
@@ -401,41 +505,42 @@ return Context.blockTimestamp
  * Internal function to initalize and assign default role to new member
  * @param applicant
 */
-export function initializeDefaultMemberRoles(applicant: AccountId): void {
+// export function initializeDefaultMemberRoles(applicant: AccountId): void {
    
-  let defaultPermissions = new Array<string>()
-  defaultPermissions.push('read')
-  
-  const defaultMemberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
-  
-  let communitysRoles = new AVLTree<string, communityRole>('dcr')
-  communitysRoles.set('default', defaultMemberRole)
-  roles.set(Context.contractName, communitysRoles)
+//   let defaultPermissions = new Array<string>()
+//   let newPermission = 'read'
+//   defaultPermissions.push(newPermission)
 
-  // assign default member role
-  let thisMemberRoles = new AVLTree<string, communityRole>('dmr' + applicant)
-  thisMemberRoles.set('default', defaultMemberRole)
-  memberRoles.set(predecessor(), thisMemberRoles)
-}
-
-/**
- * 
- * @param applicant
- */
-export function initializeDefaultReputationFactors(applicant: AccountId): void {
+//   const defaultMemberRole = new communityRole('member', u128.Zero, Context.blockTimestamp, 0, defaultPermissions, new Array<string>(), 'default member role', 'nil') // default role given to everyone
   
-  // create empty reputation factors holder
-  const defRepFactor = new reputationFactor('', u128.Zero, Context.blockTimestamp, 0, 'default reputation factor', new Array<string>(), new Array<string>(), '' )
-  
-  let communityRepFactors = new AVLTree<string, reputationFactor>('crfs')
-  communityRepFactors.set('default', defRepFactor)
-  reputationFactors.set(Context.contractName, communityRepFactors)
+//   let communitysRoles = new AVLTree<string, communityRole>('dcr')
+//   communitysRoles.set('default', defaultMemberRole)
+//   roles.set(Context.contractName, communitysRoles)
 
-  //assign default reputation factor
-  let thisMemberRepFactors = new AVLTree<string, reputationFactor>('rf' + applicant)
-  thisMemberRepFactors.set('default', defRepFactor)
-  memberRepFactors.set(predecessor(), thisMemberRepFactors)
-}
+//   // assign default member role
+//   let thisMemberRoles = new AVLTree<string, communityRole>('dmr' + applicant)
+//   thisMemberRoles.set('default', defaultMemberRole)
+//   memberRoles.set(predecessor(), thisMemberRoles)
+// }
+
+// /**
+//  * 
+//  * @param applicant
+//  */
+// export function initializeDefaultReputationFactors(applicant: AccountId): void {
+  
+//   // create empty reputation factors holder
+//   const defRepFactor = new reputationFactor('', u128.Zero, Context.blockTimestamp, 0, 'default reputation factor', new Array<string>(), new Array<string>(), '' )
+  
+//   let communityRepFactors = new AVLTree<string, reputationFactor>('crfs')
+//   communityRepFactors.set('default', defRepFactor)
+//   reputationFactors.set(Context.contractName, communityRepFactors)
+
+//   //assign default reputation factor
+//   let thisMemberRepFactors = new AVLTree<string, reputationFactor>('rf' + applicant)
+//   thisMemberRepFactors.set('default', defRepFactor)
+//   memberRepFactors.set(predecessor(), thisMemberRepFactors)
+// }
 
 
 /**
@@ -449,6 +554,19 @@ function _internalTransfer(from: AccountId, to: AccountId, token: AccountId, amo
   assertValidId(from)
   assertValidId(to)
   TokenClass.transfer(from, to, token, amount)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"_internalTransfer",
+      "data":{
+        "from":"${from}",
+        "to":"${to}",
+        "token":"${token}",
+        "amount":"${amount}",
+        "time":${Context.blockTimestamp}
+      }}}`)
 }
 
 
@@ -473,10 +591,6 @@ function _fairShare(balance: u128, shares: u128, totalShares: u128): u128 {
  * flags: [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration]
 */
 function _votingPeriodPassed(proposal: Proposal): boolean {
-  
-  // check that we've finished the voting/grace periods so it's ready for processing
-  //let firstAdd = proposal.startingPeriod + storage.getSome<i32>('votingPeriodLength') 
-  //assert(getCurrentPeriod() >= (firstAdd + storage.getSome<i32>('gracePeriodLength')), ERR_NOT_READY)
   assert(getCurrentPeriod() > (proposal.gracePeriod + storage.getSome<i32>('gracePeriodLength')), ERR_NOT_READY)
   
   // check to confirm it hasn't already been processed
@@ -509,23 +623,22 @@ function _didPass(proposal: Proposal): boolean {
 
   // Threshold voting rule (threshold% of total vote)
   let voteThreshold = u128.from(storage.getSome<i32>('voteThreshold'))
-  logging.log('vote threshold' + voteThreshold.toString())
+  
   let totalShares = storage.getSome<u128>('totalShares')
-  logging.log('totalshares' + totalShares.toString())
+  
   let totalLoot = storage.getSome<u128>('totalLoot')
-  logging.log('totalloot' + totalLoot.toString())
+  
   
   let totalVotes = u128.add(proposal.yesVotes, proposal.noVotes)
-  logging.log('total votes' + totalVotes.toString())
+  
   u128.muldiv(totalShares, voteThreshold, u128.from('100'))
   let achieved = u128.muldiv(totalVotes, u128.from('100'), totalShares)
-  logging.log('achieved' + achieved.toString())
+  
   let didPass = (proposal.yesVotes > proposal.noVotes && u128.ge(achieved, voteThreshold)) as boolean
-  logging.log('didpass 0' + didPass.toString())
+ 
   // Make the proposal fail if the dilutionBound is exceeded 
   if(u128.lt(u128.mul(u128.add(totalShares, totalLoot), u128.from(storage.getSome<i32>('dilutionBound'))), u128.from(proposal.maxTotalSharesAndLootAtYesVote))) {
     didPass = false
-    logging.log('failed here 0')
   }
  
   // Make the proposal fail if the applicant is jailed
@@ -534,7 +647,6 @@ function _didPass(proposal: Proposal): boolean {
   if(members.contains(proposal.applicant)) {
     if(members.getSome(proposal.applicant).jailed != 0) {
       didPass = false
-      logging.log('failed here 1')
     }
   }
 
@@ -547,37 +659,28 @@ function _didPass(proposal: Proposal): boolean {
 
   //Make the proposal fail if it is requesting more tokens as payment than the available fund balance
   if(u128.gt(proposal.paymentRequested, u128.Zero)){
-    logging.log('in here 0')
     if(proposal.referenceIds.length == 0 && proposal.flags[11]){
       // is a payout not related to a funding commitment - check against GUILD
-      logging.log('in here 1')
       if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
-      didPass = false
-      logging.log('failed here 2')
+        didPass = false
       }
     }
     if(proposal.referenceIds.length > 0 && proposal.flags[11]){
-      logging.log('in here 2')
       // is a payout that references a funding commitment - check against ESCROW
       if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(ESCROW, proposal.paymentToken)))) {
         didPass = false
-        logging.log('failed here 3')
       }
     }
     if(proposal.referenceIds.length > 0 && proposal.flags[7]){
-      logging.log('in here 2')
       // is a funding commitment check against GUILD
       if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
         didPass = false
-        logging.log('failed here 3')
       }
     }
     if(!proposal.flags[7] && !proposal.flags[11]){
-      logging.log('in here 2')
       // is not a funding commitment or payout - check against GUILD
       if(u128.gt(proposal.paymentRequested, u128.from(TokenClass.get(GUILD, proposal.paymentToken)))) {
         didPass = false
-        logging.log('failed here 3')
       }
     }
   }
@@ -586,7 +689,6 @@ function _didPass(proposal: Proposal): boolean {
   let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
   if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && totalGuildBankTokens >= MAX_TOKEN_GUILDBANK_COUNT) {
     didPass = false
-    logging.log('failed here 4')
   }
   
   return didPass
@@ -602,7 +704,21 @@ function _returnDeposit(to: AccountId): boolean {
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   let depositToken = storage.getSome<string>('depositToken')
   let transferred = _sTRaw(proposalDeposit, depositToken, to)
+
   if(transferred) {
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"_returnDeposit",
+        "data":{
+          "proposalDeposit":"${proposalDeposit}",
+          "depositToken":"${depositToken}",
+          "returnedTo":"${to}",
+          "time":${Context.blockTimestamp}
+        }}}`)
+
     return true
   } else {
     return false
@@ -665,13 +781,26 @@ function _ragequit(memberAddress: AccountId, sharesToBurn: u128, lootToBurn: u12
     let amountToRagequit = _fairShare(TokenClass.get(GUILD, approvedTokens[i]), sharesAndLootToBurn, initialTotalSharesAndLoot)
     if (u128.gt(amountToRagequit, u128.Zero)) {
 
-      // transfer to user
-      let transferred = _sTRaw(amountToRagequit, approvedTokens[i], memberAddress)
-
-      if(transferred) {
-        TokenClass.withdrawFromGuild(memberAddress, approvedTokens[i], amountToRagequit)
-      }
-
+    // transfer to user
+    TokenClass.withdrawFromGuild(memberAddress, approvedTokens[i], amountToRagequit)
+    _sTRaw(amountToRagequit, approvedTokens[i], memberAddress)
+    
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"_ragequit",
+        "data":{
+          "amountToRagequit":"${amountToRagequit}",
+          "sharesBurned":"${sharesToBurn}",
+          "lootBurned":"${lootToBurn}",
+          "newTotalShares":"${totalShares}",
+          "newTotalLoot":"${totalLoot}",
+          "token":"${approvedTokens[i]}",
+          "memberAddress":"${memberAddress}",
+          "time":${Context.blockTimestamp}
+        }}}`)
+      
     }
   }
 }
@@ -694,7 +823,20 @@ function canRageQuit(highestIndexYesVote: u32): boolean {
  * @param to
 */
 export function withdrawBalance(token: AccountId, amount: u128, to: AccountId): void {
-  _withdrawBalance(token, amount, to)  
+  _withdrawBalance(token, amount, to)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"withdrawBalance",
+      "data":{
+        "token":"${token}",
+        "amount":"${amount}",
+        "withdrawTo":"${to}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
 }
 
 /**
@@ -709,12 +851,12 @@ function _withdrawBalance(token: AccountId, amount: u128, to: AccountId): boolea
   TokenClass.assertBalance(to, token, amount)
 
   let fairShare = getCurrentShare(to)
-  assert(u128.le(amount, fairShare), 'asking to withdraw more than fair share of the fund')
+  assert(u128.le(amount, fairShare), 'can not withdraw more than fairshare')
 
+  TokenClass.withdrawFromTotal(to, token, amount)
   let transferred = _sTRaw(amount, token, to)
 
   if(transferred) {
-    TokenClass.withdrawFromTotal(to, token, amount)
     return true
   }
   return false
@@ -744,20 +886,33 @@ export function cancelProposal(proposalId: u32, tribute: u128, loot: u128): Prop
     memberProposals.delete(proposal.applicant)
   }
 
-  // return proposal deposit
-  let returned = _returnDeposit(proposal.proposer)
+  // return any shares/loot
+  let totalSharesLoot = u128.add(tribute, loot)
+  TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesLoot)
+  _sTRaw(totalSharesLoot, proposal.tributeToken, proposal.proposer)
 
-  if(returned){
-    // return any shares/loot
-    let totalSharesLoot = u128.add(tribute, loot)
-    let secondTransfer = _sTRaw(totalSharesLoot, proposal.tributeToken, proposal.proposer)
+  // return deposit
+  _returnDeposit(proposal.proposer)
 
-    if(secondTransfer) {
-      TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, totalSharesLoot)
-    }
-    return proposal
-  }
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"cancelProposal",
+      "data":{
+        "proposalId":${proposalId},
+        "contribution":"${tribute}",
+        "loot":"${loot}",
+        "cancelledBy":"${predecessor()}",
+        "cancelledProposalAmount":"${totalSharesLoot}",
+        "cancelledProposalToken":"${proposal.tributeToken}",
+        "transferredTo":"${proposal.proposer}",
+        "flags":${proposal.flags},
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   return proposal
+  
 }
 
 
@@ -788,10 +943,24 @@ export function makeDonation(contractId: AccountId, contributor: AccountId, toke
   contribution.contributed = Context.blockTimestamp
   contributions.set(donationId, contribution)
   
+  TokenClass.addToGuild(token, amount)
   let transferred = _sTRaw(amount, token, contractId)
 
   if(transferred) {
-    TokenClass.addToGuild(token, amount)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"makeDonation",
+        "data":{
+          "contractId":"${contractId}",
+          "donationId":${donationId},
+          "donationAmount":"${amount}",
+          "donator":"${contributor}",
+          "donationToken":"${token}",
+          "time":${Context.blockTimestamp}
+        }}}`)
 
     return true
   } else {
@@ -825,10 +994,24 @@ function _makeDonation(contractId: AccountId, contributor: AccountId, token: Acc
   contribution.contributed = Context.blockTimestamp
   contributions.set(donationId, contribution)
   
+  TokenClass.addToGuild(token, amount)
   let transferred = _sTRaw(amount, token, contractId)
 
   if(transferred) {
-    TokenClass.addToGuild(token, amount)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"_makeDonation",
+        "data":{
+          "contractId":"${contractId}",
+          "donationId":${donationId},
+          "donationAmount":"${amount}",
+          "donator":"${contributor}",
+          "donationToken":"${token}",
+          "time":${Context.blockTimestamp}
+        }}}`)
 
     return true
   } else {
@@ -855,6 +1038,18 @@ export function ragekick(memberToKick: AccountId): boolean {
   assert(canRageQuit(member.highestIndexYesVote), ERR_CANNOT_RAGEQUIT) // cannot ragequit until highest index proposal member voted YES on is processed
 
   _ragequit(memberToKick, u128.Zero, member.loot)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"rageKick",
+      "data":{
+        "memberToKick":"${memberToKick}",
+        "kickedBy":"${predecessor()}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   return true
 }
 
@@ -921,6 +1116,25 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
       member.roles,
       member.reputation
       ))
+
+      logging.log(`{
+        "EVENT_JSON":{
+          "standard":"nep171",
+          "version":"1.0.0",
+          "event":"changeMember",
+          "data":{
+            "delegateKey":"${member.delegateKey}}",
+            "shares":"${newShares}",
+            "delegatedShares":"${member.delegatedShares}",
+            "receivedDelegations":"${member.receivedDelegations}",
+            "loot":"${newLoot}",
+            "existing":${true},
+            "highestIndexYesVote":${member.highestIndexYesVote},
+            "jailed":${member.jailed},
+            "joined":${member.joined},
+            "updated":${Context.blockTimestamp},
+            "active":${true}
+          }}}`)
     
   } else {
     // the applicant is a new member, create a new record for them
@@ -948,6 +1162,25 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
           member.roles,
           member.reputation
           ))
+
+          logging.log(`{
+            "EVENT_JSON":{
+              "standard":"nep171",
+              "version":"1.0.0",
+              "event":"changeMember",
+              "data":{
+                "delegateKey":"${memberToOverride}}",
+                "shares":"${member.shares}",
+                "delegatedShares":"${member.delegatedShares}",
+                "receivedDelegations":"${member.receivedDelegations}",
+                "loot":"${member.loot}",
+                "existing":${true},
+                "highestIndexYesVote":${member.highestIndexYesVote},
+                "jailed":${member.jailed},
+                "joined":${member.joined},
+                "updated":${Context.blockTimestamp},
+                "active":${true},
+              }}}`)
       }
     }
 
@@ -965,9 +1198,30 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
       Context.blockTimestamp, 
       Context.blockTimestamp, 
       true,
-      new Array<communityRole>(),
-      new Array<reputationFactor>()
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>()
+      comRoles,
+      repFactors
       ))
+
+      logging.log(`{
+        "EVENT_JSON":{
+          "standard":"nep171",
+          "version":"1.0.0",
+          "event":"changeMember",
+          "data":{
+            "delegateKey":"${proposal.applicant}}",
+            "shares":"${proposal.sharesRequested}",
+            "delegatedShares":"0",
+            "receivedDelegations":"0",
+            "loot":"${proposal.lootRequested}",
+            "existing":${true},
+            "highestIndexYesVote":0,
+            "jailed":0,
+            "joined":${Context.blockTimestamp},
+            "updated":${Context.blockTimestamp},
+            "active":${true},
+          }}}`)
    
     // add link from member to proposal
    
@@ -975,6 +1229,16 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
     let totalMembers = storage.getSome<u128>('totalMembers')
     totalMembers = u128.add(totalMembers, u128.from(1))
     storage.set('totalMembers', totalMembers)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"totalMemberChange",
+        "data":{
+          "totalMembers":"${totalMembers}",
+          "time":${Context.blockTimestamp}
+        }}}`)
    
     memberAddressByDelegatekey.set(proposal.applicant, proposal.applicant)
   }
@@ -983,16 +1247,46 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
   let currentTotalShares = storage.getSome<u128>('totalShares')
   let newTotalShares = u128.add(currentTotalShares, proposal.sharesRequested)
   storage.set<u128>('totalShares', newTotalShares)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"totalSharesChange",
+      "data":{
+        "totalShares":"${newTotalShares}",
+        "time":${Context.blockTimestamp}
+      }}}`)
  
   let currentTotalLoot = storage.getSome<u128>('totalLoot')
   let newTotalLoot = u128.add(currentTotalLoot, proposal.lootRequested)
   storage.set<u128>('totalLoot', newTotalLoot)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"totalLootChange",
+      "data":{
+        "totalLoot":"${newTotalLoot}",
+        "time":${Context.blockTimestamp}
+      }}}`)
  
   // if the proposal tribute is the first tokens of its kind to make it into the guild bank, increment total guild bank tokens
   if(u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero) && u128.gt(proposal.tributeOffered, u128.Zero)) {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens + 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"totalGuildBankTokenChange",
+        "data":{
+          "totalGuildBankTokens":${newTotalGuildBankTokens},
+          "time":${Context.blockTimestamp}
+        }}}`)
   }
   
   // If commitment, move funds from bank to escrow
@@ -1013,7 +1307,7 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
       <i32>parseInt(proposal.configuration[2]), //gracePeriodLength
       u128.from(proposal.configuration[3]), //proposalDeposit
       <i32>parseInt(proposal.configuration[4]),  //dilutionBound
-      <i32>parseInt(proposal.configuration[5]), //voteThreshold)
+      <i32>parseInt(proposal.configuration[5]), //voteThreshold
       u128.from(proposal.configuration[6]), // platformFeePercent
       <AccountId>(proposal.configuration[7]) // platformAccount
     )
@@ -1021,69 +1315,188 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
 
   //make role changes if it's a community role proposal
   if(proposal.flags[12]){
-    if(proposal.roleConfiguration.action == 'add'){
+    if(proposal.roleConfiguration[0].action == 'add'){
       //get contract roles
-      let contractRoles = roles.getSome(Context.contractName)
-      assert(!contractRoles.getSome(proposal.roleConfiguration.roleName), 'role already exists, cannot add')
-      contractRoles.set(proposal.roleConfiguration.roleName, proposal.roleConfiguration)
-      roles.set(Context.contractName, contractRoles)
+      if(roles.contains(Context.contractName)){
+        let contractRoles = roles.getSome(Context.contractName)
+        assert(!contractRoles.get(proposal.roleConfiguration[0].roleName), 'role already exists, cannot add')
+        contractRoles.set(proposal.roleConfiguration[0].roleName, proposal.roleConfiguration[0])
+        roles.set(Context.contractName, contractRoles)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"addRole",
+            "data":{
+              "contract":"${Context.contractName}",
+              "role":"${proposal.roleConfiguration[0].roleName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
-    if(proposal.roleConfiguration.action == 'edit'){
-      let currentCommunityRoles = roles.getSome(Context.contractName)
-      currentCommunityRoles.set(proposal.roleConfiguration.roleName, proposal.roleConfiguration)
-      roles.set(Context.contractName, currentCommunityRoles)
+    if(proposal.roleConfiguration[0].action == 'edit'){
+      if(roles.contains(Context.contractName)){
+        let currentCommunityRoles = roles.getSome(Context.contractName)
+        currentCommunityRoles.set(proposal.roleConfiguration[0].roleName, proposal.roleConfiguration[0])
+        roles.set(Context.contractName, currentCommunityRoles)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"editRole",
+            "data":{
+              "contract":"${Context.contractName}",
+              "role":"${proposal.roleConfiguration[0].roleName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
-    if(proposal.roleConfiguration.action == 'delete'){
-      let contractRoles = roles.getSome(Context.contractName)
-      assert(contractRoles.getSome(proposal.roleConfiguration.roleName), 'role does not exist, cannot delete')
-      contractRoles.delete(proposal.roleConfiguration.roleName)
-      roles.set(Context.contractName, contractRoles)
+    if(proposal.roleConfiguration[0].action == 'delete'){
+      if(roles.contains(Context.contractName)){
+        let contractRoles = roles.getSome(Context.contractName)
+        assert(contractRoles.get(proposal.roleConfiguration[0].roleName), 'role does not exist, cannot delete')
+        contractRoles.delete(proposal.roleConfiguration[0].roleName)
+        roles.set(Context.contractName, contractRoles)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"deleteRole",
+            "data":{
+              "contract":"${Context.contractName}",
+              "role":"${proposal.roleConfiguration[0].roleName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
   }
 
    //make reputation factor changes if it's a reputation factor proposal
    if(proposal.flags[13]){
-    if(proposal.reputationConfiguration.action == 'add'){
-      let contractRepFactors = reputationFactors.getSome(Context.contractName)
-      assert(!contractRepFactors.getSome(proposal.reputationConfiguration.repFactorName), 'reputation factor already exists, cannot add')
-      contractRepFactors.set(proposal.reputationConfiguration.repFactorName, proposal.reputationConfiguration)
-      reputationFactors.set(Context.contractName, contractRepFactors)
+    if(proposal.reputationConfiguration[0].action == 'add'){
+      if(reputationFactors.contains(Context.contractName)){
+        let contractRepFactors = reputationFactors.getSome(Context.contractName)
+        assert(!contractRepFactors.containsKey(proposal.reputationConfiguration[0].repFactorName), 'reputation factor already exists, cannot add')
+        contractRepFactors.set(proposal.reputationConfiguration[0].repFactorName, proposal.reputationConfiguration[0])
+        reputationFactors.set(Context.contractName, contractRepFactors)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"addRepFactor",
+            "data":{
+              "contract":"${Context.contractName}",
+              "repFactor":"${proposal.reputationConfiguration[0].repFactorName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
-    if(proposal.reputationConfiguration.action == 'edit'){
-      let currentCommunityRepFactors = reputationFactors.getSome(Context.contractName)
-      currentCommunityRepFactors.set(proposal.reputationConfiguration.repFactorName, proposal.reputationConfiguration)
-      reputationFactors.set(Context.contractName, currentCommunityRepFactors)
+    if(proposal.reputationConfiguration[0].action == 'edit'){
+      if(reputationFactors.contains(Context.contractName)){
+        let currentCommunityRepFactors = reputationFactors.getSome(Context.contractName)
+        currentCommunityRepFactors.set(proposal.reputationConfiguration[0].repFactorName, proposal.reputationConfiguration[0])
+        reputationFactors.set(Context.contractName, currentCommunityRepFactors)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"editRepFactor",
+            "data":{
+              "contract":"${Context.contractName}",
+              "repFactor":"${proposal.reputationConfiguration[0].repFactorName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
-    if(proposal.reputationConfiguration.action == 'delete'){
-      let contractRepFactors = reputationFactors.getSome(Context.contractName)
-      assert(contractRepFactors.getSome(proposal.reputationConfiguration.repFactorName), 'reputation factor does not exist, cannot delete')
-      contractRepFactors.delete(proposal.reputationConfiguration.repFactorName)
-      reputationFactors.set(Context.contractName, contractRepFactors)
+    if(proposal.reputationConfiguration[0].action == 'delete'){
+      if(reputationFactors.contains(Context.contractName)){
+        let contractRepFactors = reputationFactors.getSome(Context.contractName)
+        assert(contractRepFactors.getSome(proposal.reputationConfiguration[0].repFactorName), 'reputation factor does not exist, cannot delete')
+        contractRepFactors.delete(proposal.reputationConfiguration[0].repFactorName)
+        reputationFactors.set(Context.contractName, contractRepFactors)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"addRepFactor",
+            "data":{
+              "contract":"${Context.contractName}",
+              "repFactor":"${proposal.reputationConfiguration[0].repFactorName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
   }
 
    //assign, delete, modify member roles
    if(proposal.flags[14]){
 
-    if(proposal.memberRoleConfiguration.action == 'assign'){
-      let contractRoles = roles.getSome(Context.contractName)
-      assert(contractRoles.getSome(proposal.memberRoleConfiguration.roleName), 'role does not exist, cannot add')
-      let currentMemberRoles = memberRoles.getSome(proposal.applicant)
-      assert(!currentMemberRoles.getSome(proposal.memberRoleConfiguration.roleName), 'member already has this role')
-      currentMemberRoles.set(proposal.memberRoleConfiguration.roleName, proposal.memberRoleConfiguration)
-      memberRoles.set(proposal.applicant, currentMemberRoles)
+    if(proposal.memberRoleConfiguration[0].action == 'assign'){
+      if(roles.contains(Context.contractName)){
+        let contractRoles = roles.getSome(Context.contractName)
+        assert(contractRoles.getSome(proposal.memberRoleConfiguration[0].roleName), 'role does not exist, cannot add')
+        if(memberRoles.contains(Context.contractName)){
+          let currentMemberRoles = memberRoles.getSome(proposal.applicant)
+          assert(!currentMemberRoles.getSome(proposal.memberRoleConfiguration[0].roleName), 'member already has this role')
+          currentMemberRoles.set(proposal.memberRoleConfiguration[0].roleName, proposal.memberRoleConfiguration[0])
+          memberRoles.set(proposal.applicant, currentMemberRoles)
+
+          logging.log(`{
+            "EVENT_JSON":{
+              "standard":"nep171",
+              "version":"1.0.0",
+              "event":"assignRole",
+              "data":{
+                "member":"${proposal.applicant}",
+                "role":"${proposal.memberRoleConfiguration[0].roleName}",
+                "time":${Context.blockTimestamp}
+              }}}`)
+        }
+      }
     }
-    if(proposal.memberRoleConfiguration.action == 'update'){
-      let currentMemberRoles = memberRoles.getSome(proposal.applicant)
-      assert(currentMemberRoles.getSome(proposal.memberRoleConfiguration.roleName), 'member already has this role')
-      currentMemberRoles.set(proposal.memberRoleConfiguration.roleName, proposal.memberRoleConfiguration)
-      memberRoles.set(proposal.applicant, currentMemberRoles)
+    if(proposal.memberRoleConfiguration[0].action == 'update'){
+      if(memberRoles.contains(Context.contractName)){
+        let currentMemberRoles = memberRoles.getSome(proposal.applicant)
+        assert(currentMemberRoles.getSome(proposal.memberRoleConfiguration[0].roleName), 'member already has this role')
+        currentMemberRoles.set(proposal.memberRoleConfiguration[0].roleName, proposal.memberRoleConfiguration[0])
+        memberRoles.set(proposal.applicant, currentMemberRoles)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"updateRole",
+            "data":{
+              "member":"${proposal.applicant}",
+              "role":"${proposal.memberRoleConfiguration[0].roleName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
-    if(proposal.memberRoleConfiguration.action == 'unassign'){
-      let currentMemberRoles = memberRoles.getSome(proposal.applicant)
-      assert(currentMemberRoles.getSome(proposal.memberRoleConfiguration.roleName), 'member does not have this role')
-      currentMemberRoles.delete(proposal.memberRoleConfiguration.roleName)
-      memberRoles.set(proposal.applicant, currentMemberRoles)
+    if(proposal.memberRoleConfiguration[0].action == 'unassign'){
+      if(memberRoles.contains(Context.contractName)){
+        let currentMemberRoles = memberRoles.getSome(proposal.applicant)
+        assert(currentMemberRoles.getSome(proposal.memberRoleConfiguration[0].roleName), 'member does not have this role')
+        currentMemberRoles.delete(proposal.memberRoleConfiguration[0].roleName)
+        memberRoles.set(proposal.applicant, currentMemberRoles)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"unassignRole",
+            "data":{
+              "member":"${proposal.applicant}",
+              "role":"${proposal.memberRoleConfiguration[0].roleName}",
+              "time":${Context.blockTimestamp}
+            }}}`)
+      }
     }
   }
 
@@ -1101,26 +1514,68 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
         assert(TokenClass.hasBalanceFor(GUILD, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
         if(u128.gt(platformPayment, u128.Zero)){
           let depositToken = storage.getSome<string>('depositToken')
-          let platformTransfer = _sTRaw(platformPayment, depositToken, platformAccount)
-        }
-    
-        let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
+          _sTRaw(platformPayment, depositToken, platformAccount)
 
-        if(transferred) {
-          TokenClass.subtractFromGuild(proposal.paymentToken, proposal.paymentRequested)
+          logging.log(`{
+            "EVENT_JSON":{
+              "standard":"nep171",
+              "version":"1.0.0",
+              "event":"platformPayment",
+              "data":{
+                "amount":"${platformPayment}",
+                "token":"${depositToken}",
+                "platformAccount":"${platformAccount}",
+                "time":${Context.blockTimestamp}
+              }}}`)
         }
+        TokenClass.subtractFromGuild(proposal.paymentToken, proposal.paymentRequested)
+        _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"payout",
+            "data":{
+              "amount":"${payoutAmount}",
+              "token":"${proposal.paymentToken}",
+              "receiver":"${proposal.applicant}",
+              "time":${Context.blockTimestamp}
+            }}}`)
       } else {
     
         // is related to a funding commitment - take from ESCROW
         assert(TokenClass.hasBalanceFor(ESCROW, proposal.paymentToken, proposal.paymentRequested), ERR_INSUFFICIENT_BALANCE)
         if(u128.gt(platformPayment, u128.Zero)){
           let depositToken = storage.getSome<string>('depositToken')
-          let platformTransfer = _sTRaw(platformPayment, depositToken, platformAccount)
+          _sTRaw(platformPayment, depositToken, platformAccount)
+
+          logging.log(`{
+            "EVENT_JSON":{
+              "standard":"nep171",
+              "version":"1.0.0",
+              "event":"platformPayment",
+              "data":{
+                "amount":"${platformPayment}",
+                "token":"${depositToken}",
+                "platformAccount":"${platformAccount}",
+                "time":${Context.blockTimestamp}
+              }}}`)
         }
-        let transferred = _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
-        if(transferred) {
-          TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
-        }
+        TokenClass.subtractFromEscrow(proposal.paymentToken, proposal.paymentRequested)
+        _sTRaw(payoutAmount, proposal.paymentToken, proposal.applicant)
+
+        logging.log(`{
+          "EVENT_JSON":{
+            "standard":"nep171",
+            "version":"1.0.0",
+            "event":"payout",
+            "data":{
+              "amount":"${payoutAmount}",
+              "token":"${proposal.paymentToken}",
+              "receiver":"${proposal.applicant}",
+              "time":${Context.blockTimestamp}
+            }}}`)
       }
     }
   }
@@ -1133,6 +1588,16 @@ function _proposalPassed(proposal: Proposal, platformPayment: u128): boolean {
     let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
     let newTotalGuildBankTokens = totalGuildBankTokens - 1
     storage.set('totalGuildBankTokens', newTotalGuildBankTokens)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"totalGuildBankTokenChange",
+        "data":{
+          "totalGuildBankTokens":${newTotalGuildBankTokens},
+          "time":${Context.blockTimestamp}
+        }}}`)
   }
  
   return true
@@ -1148,11 +1613,22 @@ function _proposalFailed(proposal: Proposal): boolean {
   //return all tokens to the proposer if not a commitment (not the applicant, because funds come from the proposer)
   if(!proposal.flags[7]){    
     // transfer user's contribution (tribute) back to them
-    
+    TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, proposal.tributeOffered)
     let withdrawn = _sTRaw(proposal.tributeOffered, proposal.tributeToken, proposal.proposer)
 
     if(withdrawn) {
-      TokenClass.withdrawFromEscrow(proposal.proposer, proposal.tributeToken, proposal.tributeOffered)
+
+      logging.log(`{
+        "EVENT_JSON":{
+          "standard":"nep171",
+          "version":"1.0.0",
+          "event":"withdrawContribution",
+          "data":{
+            "amount":"${proposal.tributeOffered}",
+            "token":"${proposal.tributeToken}",
+            "proposer":"${proposal.proposer}",
+            "time":${Context.blockTimestamp}
+          }}}`)
     
     return true
     }
@@ -1169,6 +1645,18 @@ function _proposalFailed(proposal: Proposal): boolean {
 function _nearTransfer(amount: u128, account: AccountId): boolean {
   let promise = ContractPromiseBatch.create(account)
   .transfer(amount)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"_nearTransfer",
+      "data":{
+        "amount":"${amount}",
+        "to":"${account}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   return true
 }
 
@@ -1258,6 +1746,9 @@ export function getInitSettings(): Array<Array<string>> {
 
   //set platform Percent
   let platformPercent = storage.getSome<u128>('platformSupportPercent')
+
+  //set platform Account
+  let platformAccount = storage.getSome<AccountId>('platformAccount')
  
   settings.push([
     summoner, 
@@ -1268,7 +1759,8 @@ export function getInitSettings(): Array<Array<string>> {
     dilutionBound.toString(),
     voteThreshold.toString(),
     summoningTime.toString(),
-    platformPercent.toString()
+    platformPercent.toString(),
+    platformAccount.toString()
   ])
 
   return settings
@@ -1475,6 +1967,35 @@ export function getCurrentShare(member: AccountId): u128 {
 }
 
 /**
+ * Change a funding amount prior to sponsorship
+ * @param proposalId
+ * @returns true or false
+ */
+export function changeAmount(proposalId: u32, token: AccountId, amount: u128): boolean {
+  let proposal = proposals.getSome(proposalId)
+  assert(tokenWhiteList.contains(token), 'token not whitelisted')
+  assert(u128.gt(amount, u128.Zero), 'amount must be positive')
+  assert(proposal.proposer == predecessor(), 'not the proposal owner')
+  assert(!proposal.flags[0], 'can not change, already sponsored')
+  proposal.paymentToken = token
+  proposal.paymentRequested = amount
+  proposals.set(proposalId, proposal)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"changeAmount",
+      "data":{
+        "amount":"${amount}",
+        "token":"${token}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
+  return true
+}
+
+/**
  * returns remaining available delegates
  * @param member 
  * @returns 
@@ -1508,6 +2029,20 @@ export function getTokenCount(): i32 {
   return approvedTokens.length
 }
 
+
+/**
+ * 
+ * @returns array of whitelisted tokennames
+ */
+export function getApprovedTokens(): Array<string> {
+  let tempArray = new Array<string>()
+  let i = 0
+  while (i < approvedTokens.length){
+    tempArray.push(approvedTokens[i])
+    i++
+  }
+  return tempArray
+}
 
 /**
  * returns total shares
@@ -1630,46 +2165,42 @@ export function submitMemberProposal (
   let totalAmount = u128.add(proposalDeposit, tributeOffered)
   assert(u128.ge(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
 
-  let transferred = _sTRaw(totalAmount, tributeToken, contractId)
+  TokenClass.addToEscrow(predecessor(), tributeToken, tributeOffered)
 
-  if(transferred) {
-    TokenClass.addToEscrow(predecessor(), tributeToken, tributeOffered)
+  if(u128.eq(tributeOffered, u128.Zero)){
+    let depositToken = storage.getSome<string>('depositToken')
+    TokenClass.add(predecessor(), depositToken)
+  }
+  _sTRaw(totalAmount, tributeToken, contractId)
+  let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
+  flags[6] = true // member proposal
 
-    if(u128.eq(tributeOffered, u128.Zero)){
-      let depositToken = storage.getSome<string>('depositToken')
-      TokenClass.add(predecessor(), depositToken)
-    }
-
-    let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
-    flags[6] = true // member proposal
-
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
-  
-    _submitProposal(
-      applicant, 
-      sharesRequested, 
-      lootRequested, 
-      tributeOffered, 
-      tributeToken, 
-      u128.Zero, 
-      '', 
-      flags, 
-      roleNames, 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      references,
-      '',
-      parameters
-      )
+  _submitProposal(
+    applicant, 
+    sharesRequested, 
+    lootRequested, 
+    tributeOffered, 
+    tributeToken, 
+    u128.Zero, 
+    '', 
+    flags, 
+    roleNames, 
+    new Array<string>(),
+    comRoles,
+    repFactors,
+    comRoles,
+    // new Array<communityRole>(),
+    // new Array<reputationFactor>(),
+    // new Array<communityRole>(), 
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+   //new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+   //new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    references,
+    '',
+    parameters
+    )
  
     return true
-  }
-return false
 }
 
 
@@ -1693,35 +2224,27 @@ export function submitAffiliationProposal (
     assert(false, 'token not whitelisted')
   }
 
-assertValidApplicant(affiliateWith)
+  assertValidApplicant(affiliateWith)
 
-let allAffiliations = affiliations.getSome(Context.contractName)
-assert(allAffiliations.get(affiliateWith) == null, 'already affiliated')
+  let allAffiliations = affiliations.getSome(Context.contractName)
+  assert(allAffiliations.get(affiliateWith) == null, 'already affiliated')
 
-assert(_affiliateProposalPresent(Context.contractName) == false, 'affiliation proposal already in progress')
+  assert(_affiliateProposalPresent(Context.contractName) == false, 'affiliation proposal already in progress')
 
-// don't allow an affiliation with an accountId we already know has bad reputation
-if(members.contains(affiliateWith)) {
-  assert(members.getSome(affiliateWith).jailed == 0, ERR_JAILED)
-}
+  // don't allow an affiliation with an accountId we already know has bad reputation
+  if(members.contains(affiliateWith)) {
+    assert(members.getSome(affiliateWith).jailed == 0, ERR_JAILED)
+  }
 
-// Funds transfers
-let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-let totalAmount = u128.add(proposalDeposit, affiliationFee)
-assert(u128.ge(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
+  // Funds transfers
+  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+  let totalAmount = u128.add(proposalDeposit, affiliationFee)
+  assert(u128.ge(Context.attachedDeposit, totalAmount), 'attached deposit not correct')
 
-let transferred = _sTRaw(totalAmount, affiliationToken, contractId)
-
-if(transferred) {
   TokenClass.addToEscrow(predecessor(), affiliationToken, totalAmount)
-
+  _sTRaw(totalAmount, affiliationToken, contractId)
   let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
   flags[15] = true // affiliation proposal
-
-  let references = new Array<GenericObject>()
-  let parameters = new Array<GenericObject>()
-  let defaultObject = new GenericObject('','')
-  references.push(defaultObject)
 
   _submitProposal(
     affiliateWith, 
@@ -1733,18 +2256,23 @@ if(transferred) {
     '', 
     flags, 
     new Array<string>(), 
-    new Array<string>(), 
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new Array<string>(),
+    comRoles,
+    repFactors,
+    comRoles,
+    // new Array<communityRole>(),
+    // new Array<reputationFactor>(),
+    // new Array<communityRole>(), 
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     references,
     '',
     parameters
     )
 
   return true
-}
-return false
+
 }
 
 
@@ -1761,7 +2289,7 @@ export function submitPayoutProposal (
   applicant: AccountId,
   paymentRequested: u128,
   paymentToken: AccountId,
-  referenceIds: Array<GenericObject>,
+  referenceIds: Array<MapEntry<string, string>>,
   contractId: AccountId
 ): boolean {
   if(tokenWhiteList.contains(paymentToken)){
@@ -1770,24 +2298,20 @@ export function submitPayoutProposal (
     assert(false, 'payment token not whitelisted')
   }
 
-assertValidApplicant(applicant)
+  assertValidApplicant(applicant)
 
-if(members.contains(applicant)) {
-  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-}
+  if(members.contains(applicant)) {
+    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+  }
 
-// Funds transfers
-let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-let depositToken = storage.getSome<string>('depositToken')
-assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  // Funds transfers
+  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+  let depositToken = storage.getSome<string>('depositToken')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
-
-if(transferred) {
-  
+  _sTRaw(proposalDeposit, depositToken, contractId)
   let flags = new Array<boolean>(18) 
   flags[11] = true // payout proposal
-  let parameters = new Array<GenericObject>()
 
   _submitProposal(
     applicant, 
@@ -1799,18 +2323,23 @@ if(transferred) {
     paymentToken, 
     flags, 
     new Array<string>(), 
-    new Array<string>(), 
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new Array<string>(),
+    comRoles,
+    repFactors,
+    comRoles,
+    // new Array<communityRole>(),
+    // new Array<reputationFactor>(),
+    // new Array<communityRole>(), 
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     referenceIds,
     '',
     parameters
     )
 
   return true
-}
-return false
+
 }
 
 /**
@@ -1823,60 +2352,54 @@ return false
 */
 export function submitFunctionProposal (
   applicant: AccountId,
-  contribution: u128,
-  contributionToken: AccountId,
+  contractId: AccountId,
   functionName: string,
-  parameters: Array<GenericObject>,
-  contractId: AccountId
+  parameters: Array<MapEntry<string, string>>,
+  deposit: u128
 ): boolean {
-  if(tokenWhiteList.contains(contributionToken)){
-    assert(tokenWhiteList.getSome(contributionToken) == true, ERR_NOT_WHITELISTED_PT)
-  } else {
-    assert(false, 'payment token not whitelisted')
+  
+  assertValidApplicant(applicant)
+  assertValidId(contractId)
+
+  if(members.contains(applicant)) {
+    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
   }
 
-assertValidApplicant(applicant)
-assertValidId(contractId)
+  // Funds transfers
+  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+  let depositToken = storage.getSome<string>('depositToken')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-if(members.contains(applicant)) {
-  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-}
-
-// Funds transfers
-let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-let depositToken = storage.getSome<string>('depositToken')
-assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
-
-let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
-
-if(transferred) {
-  
+  _sTRaw(proposalDeposit, depositToken, contractId)
   let flags = new Array<boolean>(18) 
   flags[17] = true // function proposal
-  let references = new Array<GenericObject>()
 
   _submitProposal(
     applicant, 
     u128.Zero, 
     u128.Zero, 
-    contribution, 
-    contributionToken, 
+    deposit, 
+    depositToken, 
     u128.Zero,
     '', 
     flags, 
     new Array<string>(), 
-    new Array<string>(), 
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new Array<string>(),
+    comRoles,
+    repFactors,
+    comRoles,
+    // new Array<communityRole>(),
+    // new Array<reputationFactor>(),
+    // new Array<communityRole>(),  
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     references,
     functionName,
     parameters
     )
 
   return true
-}
-return false
 }
 
 
@@ -1892,7 +2415,7 @@ export function submitCancelCommit (
   applicant: AccountId,
   paymentRequested: u128,
   paymentToken: AccountId,
-  referenceIds: Array<GenericObject>,
+  referenceIds: Array<MapEntry<string, string>>,
   contractId: AccountId
 ): boolean {
   if(tokenWhiteList.contains(paymentToken)){
@@ -1901,24 +2424,20 @@ export function submitCancelCommit (
     assert(false, 'payment token not whitelisted')
   }
 
-assertValidApplicant(applicant)
+  assertValidApplicant(applicant)
 
-if(members.contains(applicant)) {
-  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-}
+  if(members.contains(applicant)) {
+    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+  }
 
-// Funds transfers
-let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-let depositToken = storage.getSome<string>('depositToken')
-assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  // Funds transfers
+  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+  let depositToken = storage.getSome<string>('depositToken')
+  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
-
-if(transferred) {
-  
+  _sTRaw(proposalDeposit, depositToken, contractId)
   let flags = new Array<boolean>(18) 
   flags[16] = true // cancel commitment proposal
-  let parameters = new Array<GenericObject>()
 
   _submitProposal(
     applicant, 
@@ -1930,18 +2449,23 @@ if(transferred) {
     paymentToken, 
     flags, 
     new Array<string>(), 
-    new Array<string>(), 
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new Array<string>(),
+    comRoles,
+    repFactors,
+    comRoles,
+    // new Array<communityRole>(),
+    // new Array<reputationFactor>(),
+    // new Array<communityRole>(), 
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     referenceIds,
     '',
     parameters
     )
 
   return true
-}
-return false
+
 }
 
 
@@ -1960,40 +2484,32 @@ export function submitTributeProposal (
   tributeToken: AccountId,
   contractId: AccountId
 ): boolean {
-assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
-if(tokenWhiteList.contains(tributeToken)){
-  assert(tokenWhiteList.getSome(tributeToken) == true, ERR_NOT_WHITELISTED)
-} else {
-  assert(false, 'token not whitelisted')
-}
+  assert(u128.le(sharesRequested, u128.from(MAX_NUMBER_OF_SHARES_AND_LOOT)), ERR_TOO_MANY_SHARES)
+  if(tokenWhiteList.contains(tributeToken)){
+    assert(tokenWhiteList.getSome(tributeToken) == true, ERR_NOT_WHITELISTED)
+  } else {
+    assert(false, 'token not whitelisted')
+  }
 
-assertValidApplicant(applicant)
-if(members.contains(applicant)) {
-  assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-}
+  assertValidApplicant(applicant)
+  if(members.contains(applicant)) {
+    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+  }
 
-if(u128.gt(tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, tributeToken), u128.Zero)) {
-  let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
-  assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
-}
+  if(u128.gt(tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, tributeToken), u128.Zero)) {
+    let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
+    assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, ERR_FULL_GUILD_BANK)
+  }
 
-// Funds transfers
-let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-let totalContribution = u128.add(proposalDeposit, tributeOffered)
-assert(u128.ge(Context.attachedDeposit, totalContribution), 'attached deposit not correct')
+  // Funds transfers
+  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+  let totalContribution = u128.add(proposalDeposit, tributeOffered)
+  assert(u128.ge(Context.attachedDeposit, totalContribution), 'attached deposit not correct')
 
-let transferred = _sTRaw(totalContribution, tributeToken, contractId)
-
-if(transferred) {
   TokenClass.addToEscrow(applicant, tributeToken, tributeOffered)
-
+  _sTRaw(totalContribution, tributeToken, contractId)
   let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
   flags[9] = true // tribute proposal
-
-  let references = new Array<GenericObject>()
-  let parameters = new Array<GenericObject>()
-  let defaultObject = new GenericObject('','')
-  references.push(defaultObject)
 
   _submitProposal(
     applicant, 
@@ -2005,18 +2521,22 @@ if(transferred) {
     '', 
     flags, 
     new Array<string>(), 
-    new Array<string>(), 
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-    new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-    new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    new Array<string>(),
+    comRoles,
+    repFactors,
+    comRoles,
+    // new Array<communityRole>(),
+    // new Array<reputationFactor>(),
+    // new Array<communityRole>(), 
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+    // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+    // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
     references,
     '',
     parameters
     )
 
   return true
-}
-return false
 }
 
 
@@ -2031,34 +2551,30 @@ export function submitCommitmentProposal(
   applicant: AccountId, 
   paymentRequested: u128, 
   paymentToken: AccountId,
-  referenceIds: Array<GenericObject>,
+  referenceIds: Array<MapEntry<string, string>>,
   contractId: AccountId
   ): boolean {
-  if(tokenWhiteList.contains(paymentToken)){
-    assert(tokenWhiteList.getSome(paymentToken) == true, ERR_NOT_WHITELISTED_PT)
-  } else {
-    assert(false, 'payment token not whitelisted')
-  }
- 
-  assertValidApplicant(applicant)
-  assert(u128.gt(paymentRequested, u128.Zero), 'funding request must be greater than zero')
+    if(tokenWhiteList.contains(paymentToken)){
+      assert(tokenWhiteList.getSome(paymentToken) == true, ERR_NOT_WHITELISTED_PT)
+    } else {
+      assert(false, 'payment token not whitelisted')
+    }
   
-  if(members.contains(applicant)) {
-    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-  }
+    assertValidApplicant(applicant)
+    assert(u128.gt(paymentRequested, u128.Zero), 'funding request must be greater than zero')
+    
+    if(members.contains(applicant)) {
+      assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+    }
 
-  // Funds transfers
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    // Funds transfers
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    let depositToken = storage.getSome<string>('depositToken')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred) {
+    _sTRaw(proposalDeposit, depositToken, contractId)  
     let flags = new Array<boolean>(18) // [submitted, sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole]
     flags[7] = true // commitment
-
-    let parameters = new Array<GenericObject>()
 
     _submitProposal(
       applicant, 
@@ -2070,17 +2586,21 @@ export function submitCommitmentProposal(
       paymentToken, 
       flags, 
       new Array<string>(), 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      new Array<string>(),
+      comRoles,
+      repFactors,
+      comRoles,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>(),
+      // new Array<communityRole>(), 
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       referenceIds,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2095,27 +2615,20 @@ export function submitConfigurationProposal(
   configuration: Array<string>, 
   contractId: AccountId
   ): boolean {
-  assertValidApplicant(applicant)
- 
-  if(members.contains(applicant)) {
-    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-  }
+    assertValidApplicant(applicant)
+  
+    if(members.contains(applicant)) {
+      assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+    }
 
-  // Funds transfers
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    // Funds transfers
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    let depositToken = storage.getSome<string>('depositToken')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred) {
+    _sTRaw(proposalDeposit, depositToken, contractId) 
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[10] = true // configuration
-
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
     
     _submitProposal(
       applicant, 
@@ -2127,17 +2640,21 @@ export function submitConfigurationProposal(
       '', 
       flags, 
       new Array<string>(), 
-      configuration, 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      configuration,
+      comRoles,
+      repFactors,
+      comRoles,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>(),
+      // new Array<communityRole>(), 
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2150,28 +2667,21 @@ export function submitOpportunityProposal(
   applicant: AccountId,
   contractId: AccountId
   ): boolean {
-  assertValidApplicant(applicant)
- 
-  if(members.contains(applicant)) {
-    assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
-  }
+    assertValidApplicant(applicant)
+  
+    if(members.contains(applicant)) {
+      assert(members.getSome(applicant).jailed == 0, ERR_JAILED)
+    }
 
- 
-  // Funds transfers
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+  
+    // Funds transfers
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    let depositToken = storage.getSome<string>('depositToken')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred) {
+    _sTRaw(proposalDeposit, depositToken, contractId)  
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[8] = true // opportunity
-
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
 
     _submitProposal(
       applicant, 
@@ -2183,17 +2693,21 @@ export function submitOpportunityProposal(
       '', 
       flags, 
       new Array<string>(), 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      new Array<string>(),
+      comRoles,
+      repFactors,
+      comRoles,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>(),
+      // new Array<communityRole>(),  
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2220,16 +2734,9 @@ export function submitGuildKickProposal(
     let depositToken = storage.getSome<string>('depositToken')
     assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-    let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
-
-    if(transferred) {
+    _sTRaw(proposalDeposit, depositToken, contractId)
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[5] = true; // guild kick
-    
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
 
     _submitProposal(
       memberToKick, 
@@ -2241,17 +2748,21 @@ export function submitGuildKickProposal(
       '', 
       flags, 
       new Array<string>(), 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      new Array<string>(),
+      comRoles,
+      repFactors,
+      comRoles,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>(),
+      // new Array<communityRole>(), 
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2261,27 +2772,20 @@ export function submitGuildKickProposal(
  * @param contractId
 */
 export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToken: AccountId, contractId: AccountId): boolean {
-  assertValidId(tokenToWhitelist)
-  if(tokenWhiteList.contains(tokenToWhitelist)){
-    assert(tokenWhiteList.getSome(tokenToWhitelist) == false, ERR_ALREADY_WHITELISTED)
-  }
-  assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_WHITELISTED)
+    assertValidId(tokenToWhitelist)
+    if(tokenWhiteList.contains(tokenToWhitelist)){
+      assert(tokenWhiteList.getSome(tokenToWhitelist) == false, ERR_ALREADY_WHITELISTED)
+    }
+    assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, ERR_TOO_MANY_WHITELISTED)
 
-  // Funds transfers
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    // Funds transfers
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred){
+    _sTRaw(proposalDeposit, depositToken, contractId)  
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[4] = true; // whitelist
     
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
-
     _submitProposal(
       '', 
       u128.Zero, 
@@ -2292,17 +2796,21 @@ export function submitWhitelistProposal(tokenToWhitelist: AccountId, depositToke
       '', 
       flags, 
       new Array<string>(), 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      new Array<string>(),
+      comRoles,
+      repFactors,
+      comRoles,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>(),
+      // new Array<communityRole>(), 
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2329,20 +2837,18 @@ export function submitCommunityRoleProposal(
   action: string, // add, remove, edit, nil
   contractId: AccountId
   ): boolean {
-  assertValidId(contractId)
-  
-  // Funds transfers (Proposal Deposit)
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    assertValidId(contractId)
+    
+    // Funds transfers (Proposal Deposit)
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    let depositToken = storage.getSome<string>('depositToken')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred){
+    _sTRaw(proposalDeposit, depositToken, contractId)  
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
     flags[12] = true; // communityRole
 
-    let newRole = new communityRole(
+    let newRole = new CommunityRole(
         roleName,
         roleReward,
         roleStart,
@@ -2352,11 +2858,8 @@ export function submitCommunityRoleProposal(
         roleDescription,
         action
         )
-      
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
+    let newRoles = new Array<CommunityRole>()
+    newRoles.push(newRole)
 
     _submitProposal(
       '', 
@@ -2369,16 +2872,18 @@ export function submitCommunityRoleProposal(
       flags, 
       new Array<string>(), 
       new Array<string>(), 
-      newRole,
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      newRoles,
+      repFactors,
+      comRoles,
+      // new Array<reputationFactor>(),
+      // new Array<communityRole>(), 
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2408,20 +2913,18 @@ export function submitAssignRoleProposal(
   action: string, // add, remove, edit, nil
   contractId: AccountId
   ): boolean {
-  assertValidId(contractId)
-  
-  // Funds transfers (Proposal Deposit)
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    assertValidId(contractId)
+    
+    // Funds transfers (Proposal Deposit)
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    let depositToken = storage.getSome<string>('depositToken')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred){
+    _sTRaw(proposalDeposit, depositToken, contractId)  
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration,  payout, communityRole, reputationFactor, assignRole,]
     flags[14] = true; // assignRole
 
-    let newMemberRoleConfiguration = new communityRole(
+    let newMemberRoleConfiguration = new CommunityRole(
         roleName,
         roleReward,
         roleStart,
@@ -2431,11 +2934,8 @@ export function submitAssignRoleProposal(
         roleDescription,
         action
     )
-    
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
+    let newMemberRoleConfigurations = new Array<CommunityRole>()
+    newMemberRoleConfigurations.push(newMemberRoleConfiguration)
 
     _submitProposal(
       member, 
@@ -2447,17 +2947,19 @@ export function submitAssignRoleProposal(
       '', 
       flags, 
       new Array<string>(), 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
-      newMemberRoleConfiguration,
+      new Array<string>(),
+      comRoles,
+      repFactors,
+      // new Array<communityRole>(),
+      // new Array<reputationFactor>(),
+      // new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      // new reputationFactor('', u128.Zero, 0, 0, '', new Array<string>(), new Array<string>(), ''),
+      newMemberRoleConfigurations,
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2485,20 +2987,18 @@ export function submitReputationFactorProposal(
   action: string, // add, edit, delete, nil
   contractId: AccountId
   ): boolean {
-  assertValidId(contractId)
-  
-  // Funds transfers (Proposal Deposit)
-  let proposalDeposit = storage.getSome<u128>('proposalDeposit')
-  let depositToken = storage.getSome<string>('depositToken')
-  assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
+    assertValidId(contractId)
+    
+    // Funds transfers (Proposal Deposit)
+    let proposalDeposit = storage.getSome<u128>('proposalDeposit')
+    let depositToken = storage.getSome<string>('depositToken')
+    assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)  
-
-  if(transferred){
+    _sTRaw(proposalDeposit, depositToken, contractId)  
     let flags = new Array<boolean>(18) // [sponsored, processed, didPass, cancelled, whitelist, guildkick, member, commitment, opportunity, tribute, configuration, payout, communityRole, reputationFactor, assignRole, affiliation]
     flags[13] = true; // reputationFactor
 
-    let newRepFactor = new reputationFactor(
+    let newRepFactor = new ReputationFactor(
         repFactorName,
         repFactorPoints,
         repFactorStart,
@@ -2508,11 +3008,8 @@ export function submitReputationFactorProposal(
         repFactorActions,
         action
         )
-
-    let references = new Array<GenericObject>()
-    let parameters = new Array<GenericObject>()
-    let defaultObject = new GenericObject('','')
-    references.push(defaultObject)
+    let newRepFactors = new Array<ReputationFactor>()
+    newRepFactors.push(newRepFactor)
 
     _submitProposal(
       '', 
@@ -2524,17 +3021,19 @@ export function submitReputationFactorProposal(
       '', 
       flags, 
       new Array<string>(), 
-      new Array<string>(), 
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
-      newRepFactor,
-      new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      new Array<string>(),
+      comRoles,
+    //  new Array<communityRole>(),
+    //  new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
+      newRepFactors,
+      comRoles,
+     // new Array<communityRole>(),
+    //  new communityRole('', u128.Zero, 0, 0, new Array<string>(), new Array<string>(), '', ''),
       references,
       '',
       parameters
       )
     return true
-  }
-  return false
 }
 
 
@@ -2564,12 +3063,12 @@ function _submitProposal(
   flags: Array<boolean>,
   roleNames: Array<string>,
   configuration: Array<string>,
-  roleConfiguration: communityRole,
-  reputationConfiguration: reputationFactor,
-  memberRoleConfiguration: communityRole,
-  referenceIds: Array<GenericObject>,
+  roleConfiguration: Array<CommunityRole>,
+  reputationConfiguration: Array<ReputationFactor>,
+  memberRoleConfiguration: Array<CommunityRole>,
+  referenceIds: Array<MapEntry<string, string>>,
   functionName: string,
-  parameters: Array<GenericObject>
+  parameters: Array<MapEntry<string, string>>
 ): boolean {
   let proposalId = proposals.size
   proposals.set(proposalId, new Proposal(
@@ -2609,6 +3108,36 @@ function _submitProposal(
   if(flags[6]){
     memberProposals.set(applicant, 'yes')
   }
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"_submitProposal",
+      "data":{
+        "proposalId":${proposalId},
+        "applicant":"${applicant}",
+        "proposer":"${predecessor()}",
+        "sponsor":"",
+        "sharesRequested":"${sharesRequested}",
+        "lootRequested":"${lootRequested}",
+        "contribution":"${tributeOffered}",
+        "contributionToken":"${tributeToken}",
+        "paymentRequested":"${paymentRequested}",
+        "paymentToken":"${paymentToken}",
+        "startingPeriod":0,
+        "yesVotes":"0",
+        "noVotes":"0",
+        "flags":[${flags}],
+        "maximumTotalSharesAtYesVote":0,
+        "submitted":${Context.blockTimestamp},
+        "votingPeriod":0,
+        "gracePeriod":0,
+        "roleNames":[${roleNames}],
+        "voteFinalized":0,
+        "configuration":[${configuration}],
+        "functionName":"${functionName}"
+      }}}`)
   
   return true
 }
@@ -2647,90 +3176,135 @@ export function sponsorProposal(
   let proposalDeposit = storage.getSome<u128>('proposalDeposit')
   assert(u128.ge(Context.attachedDeposit, proposalDeposit), 'attached deposit not correct')
 
-  let transferred = _sTRaw(proposalDeposit, depositToken, contractId)
+  _sTRaw(proposalDeposit, depositToken, contractId)
 
-  if(transferred) {
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"proposalDeposit",
+      "data":{
+        "amount":"${proposalDeposit}",
+        "token":"${depositToken}",
+        "to":"${contractId}",
+        "time":${Context.blockTimestamp}
+      }}}`)
 
-    if(members.contains(proposal.applicant)){
-      assert(members.getSome(proposal.applicant).jailed == 0, 'member jailed')
-    }
 
-    if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero)) {
-      let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
-      assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, 'guild bank full')
-    }
-  
-    // Whitelist proposal
-    if(proposal.flags[4]) {
-        if(tokenWhiteList.contains(proposal.tributeToken)){
-          assert(tokenWhiteList.getSome(proposal.tributeToken) == false, 'already whitelisted')
-        }
-        if(proposedToWhiteList.contains(proposal.tributeToken)){
-          assert(proposedToWhiteList.getSome(proposal.tributeToken) == false, 'whitelist proposed already')
-        }
-        assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
-        proposedToWhiteList.set(proposal.tributeToken, true)
-    }
+  if(members.contains(proposal.applicant)){
+    assert(members.getSome(proposal.applicant).jailed == 0, 'member jailed')
+  }
 
-    //Guild Kick Proposal
-    if (proposal.flags[5]) {
-      if(proposedToKick.contains(proposal.applicant)){
-        assert(proposedToKick.getSome(proposal.applicant) == false, 'already proposed to kick')
+  if(u128.gt(proposal.tributeOffered, u128.Zero) && u128.eq(TokenClass.get(GUILD, proposal.tributeToken), u128.Zero)) {
+    let totalGuildBankTokens = storage.getSome<i32>('totalGuildBankTokens')
+    assert(totalGuildBankTokens < MAX_TOKEN_GUILDBANK_COUNT, 'guild bank full')
+  }
+
+  // Whitelist proposal
+  if(proposal.flags[4]) {
+      if(tokenWhiteList.contains(proposal.tributeToken)){
+        assert(tokenWhiteList.getSome(proposal.tributeToken) == false, 'already whitelisted')
       }
-      proposedToKick.set(proposal.applicant, true)
-    }
-
-    // compute starting period for proposal
-    let comparison: u64 = 0
-    if(proposals.size == 0){
-      comparison = 0
-    }
-    if(proposals.size == 1){
-      let exists = proposals.containsKey(proposalId)
-      if(exists){
-        let prevProposalStartTime = proposals.getSome(proposalId)
-        if(prevProposalStartTime.startingPeriod > 0){
-          comparison = prevProposalStartTime.startingPeriod
-          } else {
-            comparison = getCurrentPeriod()
-          }
+      if(proposedToWhiteList.contains(proposal.tributeToken)){
+        assert(proposedToWhiteList.getSome(proposal.tributeToken) == false, 'whitelist proposed already')
       }
+      assert(approvedTokens.length < MAX_TOKEN_WHITELIST_COUNT, 'can not sponsor more')
+      proposedToWhiteList.set(proposal.tributeToken, true)
+
+      logging.log(`{
+        "EVENT_JSON":{
+          "standard":"nep171",
+          "version":"1.0.0",
+          "event":"proposedToWhitelist",
+          "data":{
+            "proposalId":${proposal.proposalId},
+            "token":"${proposal.tributeToken}",
+            "by":"${predecessor()}",
+            "time":${Context.blockTimestamp}
+          }}}`)
+  }
+
+  //Guild Kick Proposal
+  if (proposal.flags[5]) {
+    if(proposedToKick.contains(proposal.applicant)){
+      assert(proposedToKick.getSome(proposal.applicant) == false, 'already proposed to kick')
     }
-    if(proposals.size > 1){
-      let exists = proposals.containsKey(proposalId-1)
-      if(exists){
-        let prevProposalStartTime = proposals.getSome(proposalId-1)
-        if(prevProposalStartTime.startingPeriod > 0){
+    proposedToKick.set(proposal.applicant, true)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"proposedToKick",
+        "data":{
+          "proposalId":${proposal.proposalId},
+          "member":"${proposal.applicant}",
+          "by":"${predecessor()}",
+          "time":${Context.blockTimestamp}
+        }}}`)
+  }
+
+  // compute starting period for proposal
+  let comparison: u64 = 0
+  if(proposals.size == 0){
+    comparison = 0
+  }
+  if(proposals.size == 1){
+    let exists = proposals.containsKey(proposalId)
+    if(exists){
+      let prevProposalStartTime = proposals.getSome(proposalId)
+      if(prevProposalStartTime.startingPeriod > 0){
         comparison = prevProposalStartTime.startingPeriod
         } else {
           comparison = getCurrentPeriod()
         }
+    }
+  }
+  if(proposals.size > 1){
+    let exists = proposals.containsKey(proposalId-1)
+    if(exists){
+      let prevProposalStartTime = proposals.getSome(proposalId-1)
+      if(prevProposalStartTime.startingPeriod > 0){
+      comparison = prevProposalStartTime.startingPeriod
+      } else {
+        comparison = getCurrentPeriod()
       }
     }
-    
-    let max = _max(getCurrentPeriod(), comparison)
-    let startingPeriod = (max) as u64
-    // let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') as u64 
-    // let gracePeriod = votingPeriod + storage.getSome<i32>('gracePeriodLength') as u64 
-    let votingPeriod = startingPeriod // voting starts immediately after being sponsored
-    let gracePeriod = (votingPeriod + storage.getSome<i32>('votingPeriodLength')) as u64 // start of voting period plus its length
-
-    let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
-
-    let flags = proposal.flags //
-    flags[0] = true //sponsored
-
-    proposal.flags = flags
-    proposal.startingPeriod = startingPeriod
-    proposal.sponsor = memberAddress
-    proposal.votingPeriod = votingPeriod
-    proposal.gracePeriod = gracePeriod
-    
-    proposals.set(proposal.proposalId, proposal)
-
-    return true
   }
-  return false
+  
+  let max = _max(getCurrentPeriod(), comparison)
+  let startingPeriod = (max) as u64
+  // let votingPeriod = startingPeriod + storage.getSome<i32>('votingPeriodLength') as u64 
+  // let gracePeriod = votingPeriod + storage.getSome<i32>('gracePeriodLength') as u64 
+  let votingPeriod = startingPeriod // voting starts immediately after being sponsored
+  let gracePeriod = (votingPeriod + storage.getSome<i32>('votingPeriodLength')) as u64 // start of voting period plus its length
+
+  let memberAddress = memberAddressByDelegatekey.getSome(predecessor())
+
+  let flags = proposal.flags //
+  flags[0] = true //sponsored
+
+  proposal.flags = flags
+  proposal.startingPeriod = startingPeriod
+  proposal.sponsor = memberAddress
+  proposal.votingPeriod = votingPeriod
+  proposal.gracePeriod = gracePeriod
+  
+  proposals.set(proposal.proposalId, proposal)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"sponsorProposal",
+      "data":{
+        "proposalId":${proposal.proposalId},
+        "sponsor":"${proposal.sponsor}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
+  return true
+
 }
 
 
@@ -2788,6 +3362,17 @@ export function submitVote(proposalId: u32, vote: string): boolean {
     proposal.yesVotes = newYesVotes
     proposal.maxTotalSharesAndLootAtYesVote = newMaxTotalSharesAndLootAtYesVote
     proposals.set(proposal.proposalId, proposal)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"changeYesTally",
+        "data":{
+          "totalYes":"${newYesVotes}",
+          "proposalId":${proposal.proposalId},
+          "time":${Context.blockTimestamp}
+        }}}`)
   }
   
   if (vote == 'no') {
@@ -2795,6 +3380,17 @@ export function submitVote(proposalId: u32, vote: string): boolean {
     let newnV = u128.add(proposal.noVotes, u128.sub(allVotingShares, member.delegatedShares))
     proposal.noVotes = newnV
     proposals.set(proposal.proposalId, proposal) 
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"changeNoTally",
+        "data":{
+          "totalNo":"${newnV}",
+          "proposalId":${proposal.proposalId},
+          "time":${Context.blockTimestamp}
+        }}}`)
   }
 
   // if total vote after this vote is processed either for or against satisfies voting decision for pass/fail, then push proposal into
@@ -2807,6 +3403,18 @@ export function submitVote(proposalId: u32, vote: string): boolean {
     proposals.set(updatedProposal.proposalId, updatedProposal)
   }
 
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"submitVote",
+      "data":{
+        "voter":"${predecessor()}",
+        "vote":"${vote}",
+        "proposalId":${proposalId},
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   return true
 }
 
@@ -2814,7 +3422,7 @@ export function submitVote(proposalId: u32, vote: string): boolean {
  * Process proposal - process a proposal that has gone through the voting period and return deposit to sponsor and proposer
  * @param proposalId // proposal index used to find the proposal
 */
-export function processProposal(proposalId: u32, platformPayment: u128, contractId: AccountId, functionName: string, parameters: Array<GenericObject>): boolean {
+export function processProposal(proposalId: u32, platformPayment: u128, contractId: AccountId, functionName: string, parameters: Array<MapEntry<string, string>>): boolean {
 
   // check to make sure the proposal is ready for processing
   let proposal = proposals.getSome(proposalId)
@@ -2824,18 +3432,57 @@ export function processProposal(proposalId: u32, platformPayment: u128, contract
   // check to see if it's a whitelist proposal
   if(proposal.flags[4]) {
     processWhitelistProposal(proposal.proposalId)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"processWhitelistProposal",
+        "data":{
+          "proposalId":${proposal.proposalId},
+          "token":"${proposal.tributeToken}",
+          "processed":${true},
+          "time":${Context.blockTimestamp}
+        }}}`)
+
     return true
   }
 
   // check to see if it's a guildkick proposal
   if(proposal.flags[5]){
     processGuildKickProposal(proposal.proposalId)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"processGuildKickProposal",
+        "data":{
+          "proposalId":${proposal.proposalId},
+          "memberKicked":"${proposal.applicant}",
+          "processed":${true},
+          "time":${Context.blockTimestamp}
+        }}}`)
+
     return true
   }
 
   // check to see if it's a function proposal
   if(proposal.flags[17]){
-    processFunctionProposal(proposal.proposalId, contractId, functionName, parameters)
+    let args = new Args(parameters)
+    processFunctionProposal(proposal.proposalId, contractId, functionName, args, Context.attachedDeposit)
+    
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"processFunctionProposal",
+        "data":{
+          "proposalId":${proposal.proposalId},
+          "processed":${true},
+          "time":${Context.blockTimestamp}
+        }}}`)
+    
     return true
   }
 
@@ -2853,8 +3500,30 @@ export function processProposal(proposalId: u32, platformPayment: u128, contract
  
   if(didPass){
     _proposalPassed(proposal, platformPayment)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"_proposalPassed",
+        "data":{
+          "proposalId":${proposal.proposalId},
+          "passed":${true},
+          "time":${Context.blockTimestamp}
+        }}}`)
+
   } else {
     _proposalFailed(proposal)
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"_proposalFailed",
+        "data":{
+          "proposalId":${proposal.proposalId},
+          "failed":${true},
+          "time":${Context.blockTimestamp}
+        }}}`)
   }
 
   // remove flag indicating a member proposal is in progress
@@ -2863,6 +3532,17 @@ export function processProposal(proposalId: u32, platformPayment: u128, contract
   }
   _returnDeposit(proposal.sponsor)
   _returnDeposit(proposal.proposer)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"processProposal",
+      "data":{
+        "proposalId":${proposal.proposalId},
+        "processed":${true},
+        "time":${Context.blockTimestamp}
+      }}}`)
 
   return true
 }
@@ -2913,7 +3593,7 @@ function processWhitelistProposal(proposalId: u32): void {
  * Process Function proposal - process a function proposal that has gone through the voting period and return deposit to sponsor and proposer
  * @param proposalId // proposal index used to find the proposal
 */
-function processFunctionProposal(proposalId: u32, contractId: AccountId, functionName: string, parameters: Array<GenericObject>): void {
+function processFunctionProposal(proposalId: u32, contractId: AccountId, functionName: string, parameters: Args, deposit: u128): void {
   let proposal = proposals.getSome(proposalId)
 
   assert(_votingPeriodPassed(proposal), 'not ready for processing')
@@ -2935,14 +3615,15 @@ function processFunctionProposal(proposalId: u32, contractId: AccountId, functio
     proposal.flags = flags
     proposals.set(proposal.proposalId, proposal)
 
+  //  let args = new MethodCall(functionName, parameters, deposit, XCC_GAS)
+
     // insert function action here
-    ContractPromise.create(
-      contractId,
+    ContractPromiseBatch.create(contractId).function_call(
       functionName,
-      parameters[0],
+      parameters,
+      deposit,
       XCC_GAS
     )
-
   }
  
   _returnDeposit(proposal.sponsor)
@@ -3014,16 +3695,56 @@ function processGuildKickProposal(proposalId: u32): void {
       member.reputation
       )
 
-    members.set(proposal.applicant, updateMember)
+    // members.set(proposal.applicant, updateMember)
+
+    
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"changeMember",
+        "data":{
+          "delegateKey":"${member.delegateKey}",
+          "shares":"0",
+          "delegatedShares":"0",
+          "receivedDelegations":"0",
+          "loot":"${u128.add(member.loot, member.shares)}",
+          "existing":${true},
+          "highestIndexYesVote":${member.highestIndexYesVote},
+          "jailed":${proposal.proposalId},
+          "joined":${member.joined},
+          "updated":${Context.blockTimestamp},
+          "active":${false}
+        }}}`)
      
     //transfer shares to loot
     let currentTotalShares = storage.getSome<u128>('totalShares')
     let newTotalShares = u128.sub(currentTotalShares, member.shares)
     storage.set<u128>('totalShares', newTotalShares)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"totalSharesChange",
+        "data":{
+          "totalShares":"${newTotalShares}",
+          "time":${Context.blockTimestamp}
+        }}}`)
     
     let currentTotalLoot = storage.getSome<u128>('totalLoot')
     let newTotalLoot = u128.add(currentTotalLoot, member.shares)
     storage.set<u128>('totalLoot', newTotalLoot)
+
+    logging.log(`{
+      "EVENT_JSON":{
+        "standard":"nep171",
+        "version":"1.0.0",
+        "event":"totalLootChange",
+        "data":{
+          "totalLoot":"${newTotalLoot}",
+          "time":${Context.blockTimestamp}
+        }}}`)
   }
 
   proposedToKick.set(proposal.applicant, false)
@@ -3060,20 +3781,21 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
   if(u128.eq(totalMembers, u128.from('1'))){
     // if last member, transfer remaining available contract balance to last member
     // use _sTRaw as remaining will be in yocto
-    let transfer = _sTRaw(availableBalance, depositToken, accountId)
+    _sTRaw(availableBalance, depositToken, accountId)
   } else {
     let fairShare = getCurrentShare(accountId)
     assert(u128.le(share, fairShare), 'asking to withdraw more than fair share of the fund')
     // transfer user's fairShare back to them
-    let withdrawn = _sTRaw(share, depositToken, accountId)
-    if(withdrawn) {
-      let balance = TokenClass.get(predecessor(), depositToken)
-      if(u128.gt(balance, u128.Zero)){
-        TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
-      } else {
-        TokenClass.withdrawFromGuildNoBalance(depositToken, share)
-      }
+    
+    let balance = TokenClass.get(predecessor(), depositToken)
+    if(u128.gt(balance, u128.Zero)){
+      TokenClass.withdrawFromGuild(predecessor(), depositToken, share)
+      _sTRaw(share, depositToken, accountId)
+    } else {
+      TokenClass.withdrawFromGuildNoBalance(depositToken, share)
+      _sTRaw(share, depositToken, accountId)
     }
+
     // make donation if applicable
     if(u128.gt(u128.sub(fairShare, share), u128.Zero)){
       _makeDonation(contractId, accountId, depositToken, u128.sub(fairShare, share))
@@ -3087,16 +3809,58 @@ export function leave(contractId: AccountId, accountId: AccountId, share: u128, 
   let newTotalShares = u128.sub(currentTotalShares, member.shares)
   storage.set<u128>('totalShares', newTotalShares)
 
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"totalSharesChange",
+      "data":{
+        "totalShares":"${newTotalShares}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   // remove loot from total loot
   let currentTotalLoot = storage.getSome<u128>('totalLoot')
   let newTotalLoot = u128.sub(currentTotalLoot, member.loot)
   storage.set<u128>('totalLoot', newTotalLoot)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"totalLootChange",
+      "data":{
+        "totalLoot":"${newTotalLoot}",
+        "time":${Context.blockTimestamp}
+      }}}`)
 
   assert(_undelegateAll(predecessor()), 'problem restoring vote delegations')
  
   // delete member
   members.delete(accountId)
   storage.set<u128>('totalMembers', u128.sub(totalMembers, u128.from('1')))
+  let newTotalMembers = storage.getSome<u128>('totalMembers')
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"totalMemberChange",
+      "data":{
+        "totalMembers":"${newTotalMembers}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"leave",
+      "data":{
+        "memberLeft":"${accountId}",
+        "leftCommunity":"${contractId}",
+        "time":${Context.blockTimestamp}
+      }}}`)
     
   return true
 }
@@ -3173,6 +3937,18 @@ export function delegate(delegateTo: string, quantity: u128): boolean {
     members.set(delegateTo, delegate)
   }
 
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"delegate",
+      "data":{
+        "delegatedTo":"${delegateTo}",
+        "delegatedFrom":"${predecessor()}",
+        "quantity":"${quantity}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
  return true
 }
 
@@ -3222,6 +3998,18 @@ export function undelegate(delegateFrom: string, quantity: u128): boolean {
       receivedDelegations.delete(delegateFrom)
     }
   }
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"unDelegate",
+      "data":{
+        "unDelegatedFrom":"${delegateFrom}",
+        "returnedTo":"${predecessor()}",
+        "quantity":"${quantity}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   
   return true
 }
@@ -3235,7 +4023,7 @@ export function undelegate(delegateFrom: string, quantity: u128): boolean {
 */
 function _undelegateAll(currentAccount: AccountId): boolean {
   assertValidId(currentAccount)
-
+  let shares = u128.Zero
   // get user's current received delegations
   if(!receivedDelegations.contains(currentAccount)){
     // are no delegations so exit
@@ -3248,13 +4036,24 @@ function _undelegateAll(currentAccount: AccountId): boolean {
   let i = 0
   while (i < entries.length){
     //get account and amount delegated to it to return to owner
-      let shares = currentUserReceivedDelegations.getSome(entries[i])
+      shares = currentUserReceivedDelegations.getSome(entries[i])
       let member = members.getSome(currentAccount)
       member.receivedDelegations = u128.sub(member.receivedDelegations, shares)
       members.set(currentAccount, member)
       let receivedFrom = members.getSome(entries[i])
       receivedFrom.delegatedShares = u128.sub(receivedFrom.delegatedShares, shares)
       members.set(entries[i], receivedFrom)
+      logging.log(`{
+        "EVENT_JSON":{
+          "standard":"nep171",
+          "version":"1.0.0",
+          "event":"_undelegateAll",
+          "data":{
+            "currentAccount":"${currentAccount}",
+            "returnedTo":"${receivedFrom.delegateKey}",
+            "quantity":"${shares}",
+            "time":${Context.blockTimestamp}
+          }}}`)
       i++
     }
     receivedDelegations.delete(currentAccount)
@@ -3274,7 +4073,7 @@ function _undelegateAll(currentAccount: AccountId): boolean {
     let j = 0
     while (j < entries.length){
       let member = members.getSome(currentAccount)
-      let shares = delegations.getSome(entries[j]).shares
+      shares = delegations.getSome(entries[j]).shares
       member.delegatedShares = u128.sub(member.delegatedShares, shares)
       members.set(currentAccount, member)
       let delegated = members.getSome(entries[j])
@@ -3283,7 +4082,8 @@ function _undelegateAll(currentAccount: AccountId): boolean {
       j++
     }
     memberDelegations.delete(currentAccount)
-  } 
+  }
+
   return true
 }
 
@@ -3321,5 +4121,17 @@ export function updateDelegateKey(newDelegateKey: AccountId): boolean {
   member.delegateKey = newDelegateKey
 
   members.set(member.delegateKey, member)
+
+  logging.log(`{
+    "EVENT_JSON":{
+      "standard":"nep171",
+      "version":"1.0.0",
+      "event":"updateDelegateKey",
+      "data":{
+        "currentDelegateKey":"${predecessor()}",
+        "newDelegateKey":"${newDelegateKey}",
+        "time":${Context.blockTimestamp}
+      }}}`)
+
   return true
 }

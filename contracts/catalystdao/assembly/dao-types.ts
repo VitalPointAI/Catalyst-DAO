@@ -15,7 +15,7 @@ export type ProposalDeposit = u128
 /** default = 3 - maximum multiplier a YES voter will be obligated to pay in case of mass ragequit */
 export type DilutionBound = i32 
 /** minimum % of total vote required for a proposal to pass - default - 51% */
-export type VoteThreshold = i32 
+export type VoteThreshold = i32
 
 // *******************
 // INTERNAL ACCOUNTING

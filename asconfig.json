@@ -2,7 +2,12 @@
   "workspaces": [
     "contracts/catalystdao",
     "contracts/registry",
-    "contracts/factory"
+    "contracts/factory",
+    "contracts/tokenFactory",
+    "contracts/nft",
+    "contracts/ft",
+    "contracts/freeregistry",
+    "contracts/fundingcontract"
   ],
   "extends": "near-sdk-as/asconfig.json"
 }
